@@ -1,0 +1,52 @@
+# ClipBridge 服务端配置
+# 复制为 config.yaml 后按需修改
+
+server:
+  # 监听地址。生产环境建议监听 127.0.0.1 由 Nginx 反代
+  listen: "0.0.0.0:8080"
+  # 对外访问基地址，用于拼接图片下载 URL。必须是 https
+  public_base_url: "https://clip.example.com"
+  # 是否为反向代理后端（影响获取客户端真实 IP）
+  behind_proxy: true
+
+storage:
+  # SQLite 数据库文件路径
+  db_path: "./data/clipbridge.db"
+  # 图片文件存放目录
+  file_dir: "./data/files"
+  # 单文件大小上限（字节），默认 20 MB
+  max_file_size: 20971520
+  # 单个设备上传频率上限（次/分钟）
+  rate_limit_per_minute: 60
+  # 内容保留天数，0 = 永久保留
+  retention_days: 7
+  # 磁盘占用上限（字节），超出后从最旧记录开始清理。0 = 不限制
+  max_disk_usage: 21474836480
+
+auth:
+  # 配对码有效时长（秒）
+  pair_code_ttl: 600
+  # Token 有效天数
+  token_ttl_days: 365
+  # JWT 签名密钥。留空则每次启动随机生成（会导致重启后所有 Token 失效）
+  # 生产环境务必设置一个足够长的随机字符串
+  jwt_secret: ""
+
+limits:
+  # 单设备同时允许的连接数
+  max_conn_per_device: 3
+  # 离线消息 TTL（小时）
+  offline_queue_ttl_hours: 24
+
+log:
+  # debug | info | warn | error
+  level: "info"
+
+# 敏感内容过滤：命中的内容将被拒绝同步
+# 注意：这是客户端识别后打标，服务端只做二次校验
+filter:
+  enabled: false
+  patterns:
+    - "\\b\\d{15,19}\\b"                                    # 银行卡号
+    - "\\b\\d{17}[\\dXx]\\b"                                # 身份证号
+    - "(?i)(password|passwd|密码)\\s*[:=]\\s*\\S+"           # 密码字段

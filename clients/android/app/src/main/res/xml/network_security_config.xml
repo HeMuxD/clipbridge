@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置。
+
+  关键点：Android 9 (API 28) 起默认禁止明文 HTTP 请求。
+  如果你的服务端只有 http://（没有域名或证书），
+  需要在下面的 domain-config 里显式放行，否则请求会直接失败。
+
+  ⚠️ 强烈建议配置域名与证书走 https://，而不是在这里放行明文。
+     放行明文意味着剪贴板内容在公网上裸奔。
+-->
+<network-security-config>
+
+    <!-- 生产环境：只允许 HTTPS，禁止一切明文流量 -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      开发调试用：仅放行本地开发服务端。
+      上线前请删除这一段。
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>      <!-- Android 模拟器访问宿主机 -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">192.168.0.0</domain>   <!-- 局域网调试 -->
+    </domain-config>
+
+</network-security-config>

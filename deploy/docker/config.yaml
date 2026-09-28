@@ -1,0 +1,48 @@
+# ClipBridge 服务端配置（容器内使用）
+#
+# docker-compose 会把本文件只读挂载到容器的 /opt/clipbridge/config.yaml。
+#
+# 注意：下面的 jwt_secret 留空，由 .env 里的 CLIPBRIDGE_JWT_SECRET 注入。
+# 环境变量优先级高于本文件，所以数据库路径、监听地址等也可以只在 .env 里改。
+
+server:
+  # 容器内要监听所有网卡，否则宿主机映射不进来
+  listen: "0.0.0.0:8080"
+  # 对外访问基地址。用于拼接图片下载 URL，必须改成实际能访问到的地址：
+  #   走域名 + TLS  → https://clip.example.com
+  #   局域网直连     → http://192.168.1.10:8080
+  # 留错会导致客户端拿到的图片 URL 打不开。
+  public_base_url: "http://127.0.0.1:8080"
+  behind_proxy: true
+
+storage:
+  # 指向挂载出来的数据卷
+  db_path: "/var/lib/clipbridge/clipbridge.db"
+  file_dir: "/var/lib/clipbridge/files"
+  # 单文件上限 20 MB，需与 Nginx 的 client_max_body_size 保持一致
+  max_file_size: 20971520
+  rate_limit_per_minute: 60
+  retention_days: 7
+  max_disk_usage: 21474836480
+
+auth:
+  pair_code_ttl: 600
+  token_ttl_days: 365
+  # 留空即可，由 CLIPBRIDGE_JWT_SECRET 注入。
+  # 若在这里填了值，注意别把密钥提交进版本库。
+  jwt_secret: ""
+
+limits:
+  max_conn_per_device: 3
+  offline_queue_ttl_hours: 24
+
+log:
+  level: "info"
+
+# 敏感内容过滤：命中的内容会被拒绝同步
+filter:
+  enabled: false
+  patterns:
+    - "\\b\\d{15,19}\\b"                            # 银行卡号
+    - "\\b\\d{17}[\\dXx]\\b"                        # 身份证号
+    - "(?i)(password|passwd|密码)\\s*[:=]\\s*\\S+"   # 密码字段

@@ -1,0 +1,68 @@
+# ClipBridge 服务端 systemd 单元
+#
+# 安装：
+#   sudo cp deploy/systemd/clipbridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now clipbridge
+#
+# 查看配对码：
+#   sudo journalctl -u clipbridge -n 50 --no-pager
+#
+# 重新生成配对码（会重启服务，已配对设备不受影响）：
+#   sudo systemctl restart clipbridge
+
+[Unit]
+Description=ClipBridge 跨端同步服务端
+Documentation=https://github.com/yourname/clipbridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clipbridge
+Group=clipbridge
+WorkingDirectory=/opt/clipbridge
+
+# 只监听本机，由 Nginx 反代对外
+Environment=CLIPBRIDGE_LISTEN=127.0.0.1:8080
+Environment=CLIPBRIDGE_PUBLIC_BASE_URL=https://clip.example.com
+Environment=CLIPBRIDGE_DB_PATH=/var/lib/clipbridge/clipbridge.db
+Environment=CLIPBRIDGE_FILE_DIR=/var/lib/clipbridge/files
+
+# 强烈建议：把 JWT 密钥写进这里，否则每次重启所有设备都要重新配对。
+# 生成方式：openssl rand -hex 32
+EnvironmentFile=-/etc/clipbridge/env
+
+ExecStart=/opt/clipbridge/clipbridge -config /etc/clipbridge/config.yaml
+
+Restart=always
+RestartSec=3
+
+# 优雅停止：给足时间关闭所有 WebSocket 连接
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# ---- 安全加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# 只允许写入数据目录
+ReadWritePaths=/var/lib/clipbridge
+
+# 日志走 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clipbridge
+
+[Install]
+WantedBy=multi-user.target

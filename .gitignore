@@ -1,0 +1,35 @@
+# ---- 通用 ----
+*~
+.DS_Store
+Thumbs.db
+*.log
+
+# ---- 服务端 ----
+server/dist/
+server/data/
+server/config.yaml
+server/clipbridge
+server/clipbridge.exe
+
+# ---- Windows 客户端 ----
+clients/windows/src/bin/
+clients/windows/src/obj/
+*.user
+*.suo
+
+# ---- Android ----
+clients/android/.gradle/
+clients/android/build/
+clients/android/app/build/
+clients/android/local.properties
+clients/android/.idea/
+*.iml
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# ---- 机密 ----
+*.pem
+*.key
+.env

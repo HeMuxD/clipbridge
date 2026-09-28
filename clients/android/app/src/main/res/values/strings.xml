@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClipBridge</string>
+
+    <!-- 无障碍服务文案：必须如实说明用途，否则用户会疑虑，也可能被系统标记为可疑 -->
+    <string name="accessibility_service_label">ClipBridge 后台剪贴板同步</string>
+    <string name="accessibility_service_summary">在后台自动同步你复制的文本</string>
+    <string name="accessibility_service_description">
+        Android 10 起，应用在后台无法读取剪贴板内容，这是系统为保护隐私所做的限制，且没有任何权限可以申请绕过。\n\nClipBridge 需要此服务才能在后台感知你的复制操作并自动同步到你的电脑。\n\n本服务只监听文本选择事件，不读取屏幕内容、不模拟点击、不采集任何个人信息。所有数据只发送到你自己配置的服务器。
+    </string>
+
+    <string name="share_target_label">同步到 ClipBridge</string>
+
+    <!-- 通知渠道 -->
+    <string name="channel_sync_name">同步服务</string>
+    <string name="channel_sync_desc">保持与服务器的连接</string>
+    <string name="channel_received_name">接收到的内容</string>
+    <string name="channel_received_desc">来自其他设备的内容</string>
+    <string name="channel_alert_name">提醒</string>
+    <string name="channel_alert_desc">服务异常与授权提醒</string>
+
+    <!-- 通知内容 -->
+    <string name="notif_sync_title">ClipBridge 正在同步</string>
+    <string name="notif_sync_connected">已连接到服务端</string>
+    <string name="notif_sync_connecting">正在连接…</string>
+    <string name="notif_copy_action">复制</string>
+    <string name="notif_view_action">查看</string>
+
+    <!-- 状态 -->
+    <string name="status_not_paired">尚未配对</string>
+    <string name="status_connected">已连接</string>
+    <string name="status_disconnected">未连接</string>
+</resources>

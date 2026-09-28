@@ -1,0 +1,68 @@
+# ClipBridge 服务端编排
+#
+# 用法：
+#   cd deploy/docker
+#   cp .env.example .env
+#   # 编辑 .env：填 CLIPBRIDGE_JWT_SECRET（openssl rand -hex 32）
+#   #            填 CLIPBRIDGE_PUBLIC_BASE_URL
+#   docker compose up -d --build
+#   docker compose logs -f clipbridge      # 在这里看配对码
+#
+# 几个关键点：
+#   · 容器内监听 8080，默认只绑宿主机回环，对外由宿主机 Nginx 终结 TLS。
+#     没有 Nginx、想直接访问时，把 .env 里的 CLIPBRIDGE_BIND 改成 0.0.0.0。
+#   · 必须设置 CLIPBRIDGE_JWT_SECRET，否则容器每次重建都要重新配对。
+#   · config.yaml 会被只读挂载进容器。该文件不存在时 Docker 会在宿主机上
+#     创建一个同名【目录】，容器随之启动失败 —— 本目录已内置一份，请勿删除。
+
+services:
+  clipbridge:
+    build:
+      context: ../../server
+      dockerfile: ../deploy/docker/Dockerfile
+      args:
+        VERSION: "1.0.0"
+        # 国内构建保留镜像源；海外机器可改为 https://proxy.golang.org,direct
+        GOPROXY: "https://goproxy.cn,direct"
+    image: clipbridge/server:1.0.0
+    container_name: clipbridge
+    restart: unless-stopped
+
+    # 只绑到指定网卡，默认仅本机。对外访问统一走宿主机 Nginx（负责 TLS）。
+    ports:
+      - "${CLIPBRIDGE_BIND:-127.0.0.1}:8080:8080"
+
+    environment:
+      CLIPBRIDGE_LISTEN: "0.0.0.0:8080"
+      # 环境变量优先级高于 config.yaml，这两个必须提供
+      CLIPBRIDGE_PUBLIC_BASE_URL: "${CLIPBRIDGE_PUBLIC_BASE_URL:?请在 .env 中设置 CLIPBRIDGE_PUBLIC_BASE_URL}"
+      CLIPBRIDGE_JWT_SECRET: "${CLIPBRIDGE_JWT_SECRET:?请在 .env 中设置 CLIPBRIDGE_JWT_SECRET（openssl rand -hex 32）}"
+      CLIPBRIDGE_DB_PATH: "/var/lib/clipbridge/clipbridge.db"
+      CLIPBRIDGE_FILE_DIR: "/var/lib/clipbridge/files"
+
+    volumes:
+      # 数据库与图片必须持久化，否则容器重建丢历史
+      - clipbridge-data:/var/lib/clipbridge
+      # 配置以只读方式挂进来，便于在宿主机上直接编辑
+      - ./config.yaml:/opt/clipbridge/config.yaml:ro
+
+    # 日志轮转，避免长期运行把磁盘写满
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 资源限制：个人使用场景下 1 核 256MB 足够
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  clipbridge-data:
+    driver: local
