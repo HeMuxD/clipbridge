@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/clipbridge/server/internal/auth"
+	"github.com/clipbridge/server/internal/buildinfo"
 	"github.com/clipbridge/server/internal/config"
 	"github.com/clipbridge/server/internal/hub"
 	"github.com/clipbridge/server/internal/model"
@@ -182,7 +183,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
 		"online":  s.hub.Count(),
-		"version": "1.0.0",
+		"version": buildinfo.Version,
 		"time":    time.Now().UnixMilli(),
 	})
 }

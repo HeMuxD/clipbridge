@@ -11,6 +11,8 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
+**当前版本 v0.0.1** — [本版改动](#v001-改动内容) · [下载产物](../../releases/latest)
+
 </div>
 
 ---
@@ -162,6 +164,99 @@ sequenceDiagram
 
 ---
 
+## 版本
+
+| 版本 | 日期 | 说明 |
+| --- | --- | --- |
+| **v0.0.1** | 2026-09-29 | 首个对外发布版本 |
+
+本版是**第一个可用版本**：服务端、Windows / Android 客户端与 Docker 部署已闭环，
+并在真实环境（飞牛 NAS + 家庭宽带 + 两台 Android）完整联调通过。
+
+### v0.0.1 改动内容
+
+#### 同步行为
+
+- **只同步"当前这一次"操作**：客户端启动时把剪贴板里已有内容、截图目录里已有文件登记为历史，
+  一律不上报，不会出现"一开机就把昨天复制的东西全推过去"
+- 服务端默认**不做离线补推**（`limits.offline_replay_seconds: 0`）：
+  设备离线期间积压的内容直接丢弃，上线时不会被旧内容刷屏。
+  需要容忍几秒网络抖动（重连空档里的内容不丢）时改成 `60~120` 即可
+- 配对码从"用一次即作废"改为**多台设备复用**，并支持配置**永久固定码**
+  （8 位随机码按 10 次/分钟穷举一遍约需 19 年）
+- `/api/pair` 补上**按来源 IP 的限流**（10 次/分钟）。
+  注意实现里读取的是 Nginx 注入的 `X-Real-IP` / `X-Forwarded-For` ——
+  只看 `RemoteAddr` 会把所有客户端合并成同一个限流桶，等于没限流
+
+#### Android 客户端
+
+- 上行改为**无障碍服务无感同步**，触发挂到**系统剪贴板变更通知**上：
+  对任何 App 的任意一次复制都会触发，**不依赖目标 App 的任何私有实现**，
+  微信 / QQ 这类自绘复制菜单同样生效
+- 内容来源两级回退，都走无障碍标准接口：
+  ① 无障碍事件里记下的选中区间 → ② 现场扫当前活动窗口的选中文本。
+  两级都拿不到时**宁可漏同步，也不伪造内容**
+- 下行**静默写入剪贴板**（文本直接写；图片存相册并以 `content://` URI 写入），
+  **移除通知栏的「复制」按钮与「收到内容」通知**，默认零常驻通知
+- 新增**本机截图上行**：`ContentObserver` 监听相册新增图片，按文件名 / 目录关键字
+  （`screenshot` / `截屏` / `截图`…）识别后上传。此前只实现了下行存相册，上行只支持文本
+- App 内新增「上行诊断」面板，把上行链路的关键节点就地渲染出来，
+  排障不用连电脑抓 logcat
+
+#### 服务端与部署
+
+- **单镜像**：Go 二进制与 Nginx 打进同一个镜像，一个容器、两条挂载即可起服务；
+  构建上下文改为仓库根目录，新增根级 `.dockerignore`
+- 对外统一 **8443**：`CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听与宿主机映射，不会改一边忘一边
+- 证书目录用 `CLIPBRIDGE_CERT_DIR` 注入（适配 acme.sh DNS-01，**不占用被封的 80 端口**）；
+  无证书时不会崩，降级为"仅明文 HTTP"并在日志里说明
+- 内置 `/f/` 图片静态服务（白名单正则 + 目录穿越防护），
+  容器化后图片下载不再依赖宿主机 Nginx 去读数据卷
+- 新增 `deploy/docker/deploy.sh`：幂等一键部署 —— 校验 `.env`、提示证书、
+  清理上一版遗留的双容器、等待健康检查并打印配对码
+- 版本号收敛到**单一来源** `server/internal/buildinfo`，
+  `-version`、`/healthz`、启动日志读同一个值，可用 ldflags 覆盖
+
+#### 修复
+
+- **WebSocket 升级恒返回 500**：日志中间件包装 `ResponseWriter` 后丢失了 `http.Hijacker`，
+  `websocket.Upgrader` 断言失败 —— 整个长连接链路此前从未真正通过。已显式转发 `Hijack` / `Flush`
+- **Token 校验恒失败**：`fmt.Sscanf("%s|%d")` 里 `%s` 会贪婪读到空白符，把整个 payload 吞掉，
+  导致所有带 Token 的接口一律 401。改用 `strings.Cut` 切分
+- 图片 URL 丢失扩展名，历史记录与离线补推取不到图
+- 无证书时 nginx 因 `upstream clipbridge_backend` 未定义而无法启动 ——
+  本意是"没证书就降级为明文继续可用"，实际表现却是容器反复重启
+- **Android 上行回退被静默取消的竞态**：一次复制会同时产生"点击了复制"（允许回退、到得晚）
+  与"剪贴板变更"（不允许回退、到得早）两个信号，单槽调度里后到者会取消先到者，
+  结果一次都发不出去。回退能力已改为粘性
+- Windows 客户端 `HashCache` 使用了 `System.Threading.Lock`（.NET 9 才引入），
+  而目标框架是 `net8.0-windows`，**编译不过**
+- Windows 客户端 `Consume`（命中即移除）导致同一次复制被重复上报；`ForceSyncNow` 原为空操作
+
+### 下载
+
+产物见 [Releases 页面](../../releases/latest)：
+
+| 产物 | 平台 | 说明 |
+| --- | --- | --- |
+| `clipbridge-server-0.0.1-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.1-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.1-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.1.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
+
+> **Windows 客户端**本版未提供预编译产物（构建环境无 .NET SDK），
+> 请按下方[客户端](#客户端)一节自行 `dotnet publish`。
+
+**Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
+
+```bash
+cd deploy/docker && cp .env.example .env && vi .env
+docker compose up -d --build
+```
+
+---
+
 ## 快速开始
 
 ### 服务端（Docker 一键，单容器）
@@ -204,8 +299,10 @@ go run ./cmd/clipbridge -config config.example.yaml
 ### 客户端
 
 - **Windows**：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`，运行后填入服务端地址 + 配对码即可。
-- **Android**：`cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
-  装好后打开 App → 配对 → **开启无障碍服务**，之后复制/截图即自动同步。
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.1.apk`；
+  或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
+  装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
+  之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
 
 > 完整的环境搭建、部署、排障见 `docs/开发指南.md`。
 
@@ -216,7 +313,7 @@ go run ./cmd/clipbridge -config config.example.yaml
 | 能力 | Windows | Android |
 | --- | --- | --- |
 | 监听剪贴板文本 | ✅ 系统原生通知，无感 | ⚠️ 后台受限，靠无障碍事件还原 |
-| 捕获截图 | ✅ 剪贴板位图 + 目录监控 | ⚠️ MediaProjection，重启后需重新授权 |
+| 捕获截图 | ✅ 剪贴板位图 + 目录监控 | ✅ 监听相册新增图片（需相册读取权限，默认关闭） |
 | 写入剪贴板 | ✅ 直接写入 | ✅ 静默写入（写入不受后台限制） |
 | 常驻通知 | ✅ 无（托盘图标） | ✅ 默认无；可选开关换取更强保活 |
 | 可靠性兜底 | — | ✅ 系统分享菜单（零权限） |

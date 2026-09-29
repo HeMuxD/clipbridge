@@ -2,7 +2,7 @@
 //
 // 启动后会：
 //  1. 加载配置、打开数据库
-//  2. 生成一个一次性配对码并打印到日志
+//  2. 准备配对码（配置了固定码就用它，否则随机生成）并打印到日志
 //  3. 监听 HTTP/WebSocket，等待客户端接入
 //  4. 后台定期清理过期内容与磁盘占用
 package main
@@ -21,12 +21,11 @@ import (
 
 	"github.com/clipbridge/server/internal/api"
 	"github.com/clipbridge/server/internal/auth"
+	"github.com/clipbridge/server/internal/buildinfo"
 	"github.com/clipbridge/server/internal/config"
 	"github.com/clipbridge/server/internal/hub"
 	"github.com/clipbridge/server/internal/store"
 )
-
-var version = "1.0.0"
 
 func main() {
 	var (
@@ -39,7 +38,7 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Printf("clipbridge %s\n", version)
+		fmt.Printf("clipbridge %s\n", buildinfo.Version)
 		return
 	}
 
@@ -58,7 +57,7 @@ func run(cfgPath string, rotateOnly bool, baseLog *slog.Logger) error {
 
 	log := newLogger(cfg.Log.Level)
 	log.Info("ClipBridge 服务端启动中",
-		"version", version, "listen", cfg.Server.Listen,
+		"version", buildinfo.Version, "listen", cfg.Server.Listen,
 		"publicBaseUrl", cfg.Server.PublicBaseURL)
 
 	// 生产环境安全提示：非 HTTPS 在 Android 9+ 上会被系统直接拒绝

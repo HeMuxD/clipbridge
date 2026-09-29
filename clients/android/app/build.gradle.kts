@@ -15,7 +15,7 @@ android {
         // targetSdk 保持 34，规避 Android 15 对前台服务(dataSync)的 6 小时时长上限
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.0.1"
     }
 
     buildTypes {
