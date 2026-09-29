@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +51,7 @@ import com.clipbridge.app.data.Prefs
 import com.clipbridge.app.data.StatusHolder
 import com.clipbridge.app.service.ClipClient
 import com.clipbridge.app.service.ClipboardAccessibilityService
+import com.clipbridge.app.service.ScreenshotWatcher
 import com.clipbridge.app.service.SyncEngine
 import com.clipbridge.app.service.SyncService
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +123,25 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
     val accessibilityOn = remember(resumeTick) { isAccessibilityEnabled(context) }
     var keepAlive by remember(resumeTick) { mutableStateOf(Prefs.isKeepAliveEnabled(context)) }
     val hasToken = Prefs.hasToken(context)
+
+    // 截图同步要读相册，属于敏感权限，默认关闭。
+    // 开关只在权限真正拿到之后才落地 —— 否则会出现"显示已开启但实际不工作"的假象。
+    var screenshotSync by remember(resumeTick) {
+        mutableStateOf(Prefs.isScreenshotSyncEnabled(context) && ScreenshotWatcher.hasPermission(context))
+    }
+    val screenshotPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Prefs.setScreenshotSync(context, granted)
+        screenshotSync = granted
+        message = if (granted) {
+            "截图同步已开启"
+        } else {
+            "没有相册权限，截图同步无法开启"
+        }
+        // 让正在运行的无障碍服务立刻重新评估开关，不用手动重启服务
+        ClipboardAccessibilityService.notifyPrefsChanged()
+    }
 
     Column(
         Modifier
@@ -310,12 +331,61 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
+        // ---------- 截图同步（可选） ----------
+        Text("截图同步", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "开启后，本机新拍的截图会自动上传并同步到电脑。\n" +
+                        "需要「${ScreenshotWatcher.requiredPermission().substringAfterLast('.')}」权限 —— " +
+                        "这是读取相册级别的权限，所以默认关闭，由你决定。\n" +
+                        "只同步开启之后新产生的截图，相册里的历史截图不会被补发。",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (screenshotSync) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (accessibilityOn)
+                            "已开启 —— 截图后会自动同步"
+                        else
+                            "已开启，但无障碍服务没开，实际不工作",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (accessibilityOn) Color(0xFF2E7D32) else Color(0xFFC62828)
+                    )
+                }
+            }
+            Switch(
+                checked = screenshotSync,
+                onCheckedChange = { value ->
+                    if (value) {
+                        if (ScreenshotWatcher.hasPermission(context)) {
+                            Prefs.setScreenshotSync(context, true)
+                            screenshotSync = true
+                            ClipboardAccessibilityService.notifyPrefsChanged()
+                        } else {
+                            screenshotPermLauncher.launch(ScreenshotWatcher.requiredPermission())
+                        }
+                    } else {
+                        Prefs.setScreenshotSync(context, false)
+                        screenshotSync = false
+                        ClipboardAccessibilityService.notifyPrefsChanged()
+                    }
+                }
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
         Text("使用说明", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(4.dp))
         Text(
             "· 本机复制文本 → 自动同步到电脑（需要开启无障碍服务）\n" +
+                "· 本机截图 → 自动同步（需单独开启上面的「截图同步」）\n" +
                 "· 电脑复制文本 / 截图 → 自动写进本机剪贴板，同时存一份到相册 Pictures/ClipBridge\n" +
-                "· 部分 App 的复制按钮无障碍服务识别不到，此时可用「分享 → ClipBridge」兜底\n" +
+                "· 少数 App 的复制按钮无障碍服务识别不到，可用「分享 → ClipBridge」兜底\n" +
                 "· 同步只针对你当下这一次复制，历史内容不会被重发",
             style = MaterialTheme.typography.bodySmall
         )

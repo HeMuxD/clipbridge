@@ -21,4 +21,5 @@ object ClipKind {
 object ClipOrigin {
     const val CLIPBOARD = "clipboard"
     const val SHARE = "share"
+    const val SCREENSHOT = "screenshot"
 }

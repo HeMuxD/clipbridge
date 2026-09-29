@@ -11,13 +11,16 @@
     · typeViewTextSelectionChanged —— 用户选中文本，先记下选中内容，
       供「点了复制但读不到剪贴板」时回退使用
     · typeViewClicked / typeViewLongClicked —— 识别「复制 / 剪切」菜单项被点中
+      （补充触发；主触发是系统剪贴板变更通知，对所有 App 通用）
     · typeViewFocused —— 焦点变化，顺带碰一次剪贴板
+    · typeWindowStateChanged —— 切应用时作废之前记下的选中内容，
+      避免"在 A 应用选中、切到 B 应用复制别的"被误判成复制了 A 里那段文字
 
   本服务不读取屏幕内容、不模拟点击、不采集任何个人信息，
   只按上述事件类型被动接收通知。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeViewClicked|typeViewLongClicked|typeViewFocused"
+    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeViewClicked|typeViewLongClicked|typeViewFocused|typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"

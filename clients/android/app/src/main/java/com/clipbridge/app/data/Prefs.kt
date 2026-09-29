@@ -14,6 +14,7 @@ object Prefs {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_DEVICE_NAME = "device_name"
     private const val KEY_KEEPALIVE = "keepalive_fgs"
+    private const val KEY_SCREENSHOT = "screenshot_sync"
 
     private fun sp(ctx: Context): SharedPreferences =
         ctx.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -34,6 +35,18 @@ object Prefs {
 
     fun setKeepAlive(ctx: Context, enabled: Boolean) {
         sp(ctx).edit().putBoolean(KEY_KEEPALIVE, enabled).apply()
+    }
+
+    /**
+     * 是否启用「截图同步」。
+     *
+     * 默认关闭：监听相册需要媒体读取权限（Android 13+ 是 READ_MEDIA_IMAGES），
+     * 这是个「读你所有照片」级别的权限，不该在用户没明确要求时静默索取。
+     */
+    fun isScreenshotSyncEnabled(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_SCREENSHOT, false)
+
+    fun setScreenshotSync(ctx: Context, enabled: Boolean) {
+        sp(ctx).edit().putBoolean(KEY_SCREENSHOT, enabled).apply()
     }
 
     fun save(ctx: Context, serverUrl: String, token: String, deviceId: String, deviceName: String) {

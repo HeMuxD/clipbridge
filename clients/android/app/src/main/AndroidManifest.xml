@@ -26,6 +26,16 @@
     <!-- 只有开启保活时才需要（Android 13+ 运行时申请） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ========== 截图上行（可选功能，默认关闭） ==========
+         Android 10 起分区存储，只能通过 MediaStore 感知相册里的新截图，
+         因此需要媒体读取权限。这是"读取相册"级别的敏感权限，所以做成
+         由用户在 App 内显式开启，不在安装时就索取。
+         maxSdkVersion=32：Android 13 起该权限被 READ_MEDIA_IMAGES 取代。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:name=".ClipBridgeApp"
         android:allowBackup="false"
