@@ -50,6 +50,14 @@ services:
       CLIPBRIDGE_PUBLIC_BASE_URL: "${CLIPBRIDGE_PUBLIC_BASE_URL:?请在 .env 中设置 CLIPBRIDGE_PUBLIC_BASE_URL（记得带端口）}"
       CLIPBRIDGE_JWT_SECRET: "${CLIPBRIDGE_JWT_SECRET:?请在 .env 中设置 CLIPBRIDGE_JWT_SECRET（openssl rand -hex 32）}"
 
+      # 固定配对码（可选）。填了就永久有效、可多台设备重复使用；
+      # 留空则启动时随机生成 8 位码，有效期由 config.yaml 的 auth.pair_code_ttl 决定。
+      #
+      # ⚠️ 注意 compose 的 environment 是白名单：只在 .env 里定义、不在这里列出来的
+      #    变量【不会】进入容器。新增环境变量时两处都要改，否则会静默失效。
+      CLIPBRIDGE_PAIR_CODE: "${CLIPBRIDGE_PAIR_CODE:-}"
+      CLIPBRIDGE_PAIR_CODE_LENGTH: "${CLIPBRIDGE_PAIR_CODE_LENGTH:-8}"
+
       # 离线补推窗口（秒）。0 = 不补推（默认）：
       # 同步只对"当前这一次复制/截图"生效，设备离线期间攒下的旧内容一律丢弃。
       # 想容忍几秒网络抖动（重连空档里的内容不丢），改成 60~120。
