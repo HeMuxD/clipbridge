@@ -11,10 +11,12 @@
 
     <string name="share_target_label">同步到 ClipBridge</string>
 
-    <!-- 可选保活通知：默认不出现，只有用户打开「常驻通知保活」才显示。
-         通知上没有任何操作按钮 —— 同步是全自动的。 -->
-    <string name="channel_sync_name">同步保活</string>
-    <string name="channel_sync_desc">保持与服务端的连接</string>
+    <!-- 后台保护通知。Android 要求前台服务必须显示一条通知，无法隐藏。
+         Android 14 起用户可以手动划掉它 —— 服务不会被停；
+         真被 ROM 连带杀掉时，由看门狗闹钟负责恢复。 -->
+    <string name="channel_sync_name">后台保护</string>
+    <string name="channel_sync_desc">保持与服务端的连接，App 关闭后仍可同步</string>
     <string name="notif_sync_title">ClipBridge 后台同步中</string>
-    <string name="notif_sync_desc">保持连接以便实时收发内容</string>
+    <string name="notif_sync_connected">已连接 · 复制与截图会实时同步</string>
+    <string name="notif_sync_connecting">正在连接服务端…</string>
 </resources>

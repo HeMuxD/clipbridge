@@ -13,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,16 +53,22 @@ import com.clipbridge.app.data.Prefs
 import com.clipbridge.app.data.StatusHolder
 import com.clipbridge.app.service.ClipClient
 import com.clipbridge.app.service.ClipboardAccessibilityService
+import com.clipbridge.app.service.KeepAlive
 import com.clipbridge.app.service.ScreenshotWatcher
 import com.clipbridge.app.service.SyncEngine
 import com.clipbridge.app.service.SyncService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private val OK_GREEN = Color(0xFF2E7D32)
+private val WARN_RED = Color(0xFFC62828)
+private val WARN_AMBER = Color(0xFFE65100)
+
 class MainActivity : ComponentActivity() {
 
-    /** 每次回到前台自增，用来重新检测无障碍服务是否仍处于开启状态 */
+    /** 每次回到前台自增，用来重新检测无障碍/电池优化等会随用户操作变化的状态 */
     private val resumeTick = mutableIntStateOf(0)
 
     private val requestNotificationPermission =
@@ -109,19 +117,28 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var serverUrl by remember { mutableStateOf(Prefs.getServerUrl(context)) }
-    var pairCode by remember { mutableStateOf("") }
+    // 回填上次成功配对用的码。以前这里固定从空串开始，
+    // 于是"重启后配对码没了"看上去像是配置丢了 —— 其实只是没存。
+    var pairCode by remember { mutableStateOf(Prefs.getPairCode(context)) }
     var deviceName by remember {
         mutableStateOf(Prefs.getDeviceName(context).ifEmpty { "我的安卓手机" })
     }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    // 记住"上次成功配对用过的码"，只用来给输入框配一句提示。
+    // 单独存一份是为了避免在 composition 里反复读 SharedPreferences。
+    var savedPairCode by remember { mutableStateOf(Prefs.getPairCode(context)) }
 
     val connected by StatusHolder.connected.collectAsState()
     val statusText by StatusHolder.statusText.collectAsState()
+    val diag by StatusHolder.diag.collectAsState()
 
     // 无障碍状态必须在回到前台时重新读，用户可能刚在系统设置里把它关掉
     val accessibilityOn = remember(resumeTick) { isAccessibilityEnabled(context) }
-    var keepAlive by remember(resumeTick) { mutableStateOf(Prefs.isKeepAliveEnabled(context)) }
+    var bgProtect by remember(resumeTick) { mutableStateOf(Prefs.isBackgroundProtectEnabled(context)) }
+    var batteryOk by remember(resumeTick) {
+        mutableStateOf(KeepAlive.isIgnoringBatteryOptimizations(context))
+    }
     val hasToken = Prefs.hasToken(context)
 
     // 截图同步要读相册，属于敏感权限，默认关闭。
@@ -143,6 +160,15 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
         ClipboardAccessibilityService.notifyPrefsChanged()
     }
 
+    // 诊断记录超过保留时长的自动淘汰。定时做，而不是只在新事件到来时做 ——
+    // 否则没有新事件时列表不会收缩，旧记录会一直挂在界面上。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            StatusHolder.pruneDiag()
+        }
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -157,7 +183,7 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
                 hasToken -> "未连接"
                 else -> "尚未配对"
             },
-            color = if (connected) Color(0xFF2E7D32) else Color(0xFFC62828),
+            color = if (connected) OK_GREEN else WARN_RED,
             style = MaterialTheme.typography.bodyLarge
         )
         if (statusText.isNotEmpty()) {
@@ -169,28 +195,60 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
         // 「本机复制了但对面没收到」这类问题，从服务端只看得到"零请求"，
         // 完全无法区分是设备没感知到复制、还是感知到了但发送失败。
         // 把最近的事件就地渲染出来，用户不用连电脑抓 logcat。
-        val diag by StatusHolder.diag.collectAsState()
-        if (diag.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("上行诊断（最近 ${diag.size} 条）", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.width(10.dp))
-                TextButton(onClick = { StatusHolder.clearDiag() }) { Text("清空") }
+        //
+        // 界面约束：外面整体是可滚动的一列，如果这里再直接把几十条文本铺开，
+        // 整个页面会被撑得很长，别的设置项要滑半天才能看到。所以固定 180dp 高度、
+        // 内部自己滚动，并在有新增时贴住底部。
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("上行诊断", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "${diag.size} 条 · 保留 2 小时",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { StatusHolder.clearDiag() }) { Text("清空") }
+        }
+        Spacer(Modifier.height(4.dp))
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            val scroll = rememberScrollState()
+            LaunchedEffect(diag.size) {
+                // 等这一帧布局完成后再读 maxValue，否则拿到的还是滚动前的值
+                delay(60)
+                // 用户主动往上翻过就不打扰；只在自己贴底时跟随新内容
+                if (scroll.maxValue == 0 || scroll.value >= scroll.maxValue - 48) {
+                    scroll.animateScrollTo(scroll.maxValue)
+                }
             }
-            Spacer(Modifier.height(4.dp))
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier.fillMaxWidth()
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .verticalScroll(scroll)
+                    .padding(10.dp)
             ) {
-                Column(Modifier.padding(10.dp)) {
-                    diag.forEach { line ->
-                        Text(
-                            line,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp,
-                        )
+                if (diag.isEmpty()) {
+                    Text(
+                        "暂无记录",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                    )
+                } else {
+                    Column {
+                        diag.forEach { entry ->
+                            Text(
+                                entry.text,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                            )
+                        }
                     }
                 }
             }
@@ -200,12 +258,12 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
-        // ---------- 无障碍服务：无感同步的核心 ----------
+        // ---------- 无障碍服务：上行感知的核心 ----------
         Text("无感同步", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(4.dp))
         Text(
             if (accessibilityOn)
-                "无障碍服务已开启 —— 本机复制会自动同步，收到内容会直接写进剪贴板，全程无提示。"
+                "无障碍服务已开启 —— 本机复制会自动同步，收到内容会直接写进剪贴板。"
             else
                 "需要开启无障碍服务才能在后台感知你的复制操作。这是 Android 10 之后的系统限制，" +
                     "没有任何权限可以替代。",
@@ -228,6 +286,105 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
+        // ---------- 后台保护 ----------
+        Text("后台保护", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "让同步在 App 被划出最近任务之后继续工作。\n" +
+                "Android 要求前台服务必须挂一条通知，无法隐藏 —— 那条通知就是它的标识，" +
+                "清掉通知不会让它停止；万一被系统杀掉，看门狗会自动恢复。\n" +
+                "唯一扛不住的是在系统设置里「强行停止」—— 那之后任何应用都无法自启。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.padding(end = 12.dp).weight(1f)) {
+                Text("开启后台保护", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    if (bgProtect)
+                        "已开启 —— 通知栏显示「ClipBridge 后台同步中」"
+                    else
+                        "已关闭 —— App 被划掉后可能掉线",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (bgProtect) OK_GREEN else WARN_AMBER
+                )
+            }
+            Switch(
+                checked = bgProtect,
+                onCheckedChange = { value ->
+                    bgProtect = value
+                    Prefs.setBackgroundProtect(context, value)
+                    if (value) {
+                        requestNotificationPermission()
+                        if (Prefs.hasToken(context)) {
+                            val ok = SyncService.start(context)
+                            message = if (ok) {
+                                "后台保护已开启"
+                            } else {
+                                "系统拒绝了启动请求，请退出后重新打开一次 App"
+                            }
+                        } else {
+                            message = "后台保护已开启，配对后即生效"
+                        }
+                        KeepAlive.scheduleWatchdog(context)
+                    } else {
+                        SyncService.stop(context)
+                        KeepAlive.cancelWatchdog(context)
+                        message = "后台保护已关闭"
+                    }
+                }
+            )
+        }
+
+        // 电池优化：不进白名单的话，Doze 会静默掐掉后台网络，
+        // 表现是"手机放一会儿就收不到东西"，而且没有任何报错。
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.padding(end = 12.dp).weight(1f)) {
+                Text("忽略电池优化", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    if (batteryOk)
+                        "已加入白名单 —— 系统休眠时不会切断后台连接"
+                    else
+                        "未加入 —— 手机深度休眠一段时间后可能断连",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (batteryOk) OK_GREEN else WARN_AMBER
+                )
+            }
+            TextButton(onClick = { KeepAlive.requestIgnoreBatteryOptimizations(context) }) {
+                Text(if (batteryOk) "查看" else "去加入")
+            }
+        }
+
+        // 自启动：国产 ROM 会独立控制这一项，和电池优化白名单互不替代
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.padding(end = 12.dp).weight(1f)) {
+                Text("允许自启动", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "小米 / 华为 / OPPO / vivo 等系统需要单独允许，" +
+                        "否则划掉 App 后不会被重新拉起。",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            TextButton(onClick = { KeepAlive.openAutoStartSettings(context) }) { Text("去设置") }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
         // ---------- 配对 ----------
         Text("配对", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
@@ -244,6 +401,14 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
             value = pairCode,
             onValueChange = { pairCode = it },
             label = { Text("配对码") },
+            supportingText = {
+                Text(
+                    if (savedPairCode.isNotEmpty())
+                        "已记住上次使用的配对码，换设备或改过服务端配置时才需要改"
+                    else
+                        "服务端启动日志里会打印这个码"
+                )
+            },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -271,10 +436,17 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
                     }
                     busy = false
                     if (result.ok) {
-                        Prefs.save(context, serverUrl, result.token, deviceId, deviceName)
-                        message = "配对成功"
+                        // 连同配对码一起落盘（commit 同步写），
+                        // 这样进程被杀也不会出现"配对成功但重启后又要重新配对"
+                        Prefs.save(context, serverUrl, result.token, deviceId, deviceName, pairCode)
+                        savedPairCode = pairCode.trim()
+                        message = "配对成功，重启 App 后仍然有效"
                         // 无障碍服务在的话连接已经在跑，重启一下让它换用新 Token
                         SyncEngine.restart()
+                        if (Prefs.isBackgroundProtectEnabled(context)) {
+                            SyncService.start(context)
+                            KeepAlive.scheduleWatchdog(context)
+                        }
                     } else {
                         message = "配对失败：${result.error}"
                     }
@@ -286,45 +458,19 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
             Text(if (busy) "配对中…" else "配对")
         }
 
+        if (hasToken) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "已保存配对信息，无需重复配对。" +
+                    (if (Prefs.getDeviceName(context).isNotEmpty()) "设备名：${Prefs.getDeviceName(context)}" else ""),
+                style = MaterialTheme.typography.bodySmall,
+                color = OK_GREEN
+            )
+        }
+
         if (message.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
             Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(16.dp))
-
-        // ---------- 可选：常驻通知保活 ----------
-        Text("保活（可选）", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.padding(end = 12.dp)) {
-                Text("常驻通知保活", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "默认关闭。连接由无障碍服务持有，通知栏里什么都没有。" +
-                        "若你的手机经常把后台掐掉导致掉线，再打开它。" +
-                        "（Android 要求前台服务必须显示一条通知，无法隐藏）",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            Switch(
-                checked = keepAlive,
-                onCheckedChange = { value ->
-                    keepAlive = value
-                    Prefs.setKeepAlive(context, value)
-                    if (value) {
-                        requestNotificationPermission()
-                        SyncService.start(context)
-                    } else {
-                        SyncService.stop(context)
-                    }
-                }
-            )
         }
 
         Spacer(Modifier.height(20.dp))
@@ -351,7 +497,7 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
                         else
                             "已开启，但无障碍服务没开，实际不工作",
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (accessibilityOn) Color(0xFF2E7D32) else Color(0xFFC62828)
+                        color = if (accessibilityOn) OK_GREEN else WARN_RED
                     )
                 }
             }

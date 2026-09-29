@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知栏小图标。
+  系统会把它当作 alpha 遮罩来渲染（只取形状、不取颜色），所以必须是
+  白/透明的纯剪影 —— 用彩色图标会被渲染成一块白方块。
+  24dp 下细节会糊，因此这里只保留"剪贴板 + 两条内容线"这几个最必要的笔画。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 剪贴板外框（描边，不填充，留出内部空间） -->
+    <path
+        android:pathData="M6.8,3.8 H17.2 A2,2 0 0 1 19.2,5.8 V18.9 A2,2 0 0 1 17.2,20.9 H6.8 A2,2 0 0 1 4.8,18.9 V5.8 A2,2 0 0 1 6.8,3.8 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.7" />
+
+    <!-- 顶部的夹子 -->
+    <path
+        android:pathData="M10,1.9 H14 A1.1,1.1 0 0 1 15.1,3 V4.4 A1.1,1.1 0 0 1 14,5.5 H10 A1.1,1.1 0 0 1 8.9,4.4 V3 A1.1,1.1 0 0 1 10,1.9 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- 内容线：一条长（文本）、一条短，尾巴上接一个小方块（图片） -->
+    <path
+        android:pathData="M7.9,8.6 H16.1"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M7.9,12 H12.6"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M14.6,11.2 H16.6 A1,1 0 0 1 17.6,12.2 V15.2 A1,1 0 0 1 16.6,16.2 H14.6 A1,1 0 0 1 13.6,15.2 V12.2 A1,1 0 0 1 14.6,11.2 Z"
+        android:fillColor="#FFFFFF" />
+</vector>

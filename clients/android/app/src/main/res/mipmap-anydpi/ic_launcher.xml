@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 7.x（API 24–25）的回退图标。
+  这些版本没有自适应图标，启动器也不会替我们裁形状，所以圆角要自己画。
+  构图与自适应版本一致：蓝色圆角方底 + 白色剪贴板 + 中间的「文本 + 图片」标记。
+  因为没有安全区限制，图形可以比自适应版本画得更大一些。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 品牌蓝圆角方底 -->
+    <path android:pathData="M28,4 H80 A24,24 0 0 1 104,28 V80 A24,24 0 0 1 80,104 H28 A24,24 0 0 1 4,80 V28 A24,24 0 0 1 28,4 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="4"
+                android:startY="4"
+                android:endX="104"
+                android:endY="104">
+                <item android:offset="0" android:color="#FF5AA0E8" />
+                <item android:offset="1" android:color="#FF2B6CBC" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 顶部夹子 -->
+    <path
+        android:pathData="M49,23 H59 A5,5 0 0 1 64,28 V30 A5,5 0 0 1 59,35 H49 A5,5 0 0 1 44,30 V28 A5,5 0 0 1 49,23 Z"
+        android:fillColor="#FFFFFFFF" />
+
+    <!-- 剪贴板板身 -->
+    <path
+        android:pathData="M37,31 H71 A7,7 0 0 1 78,38 V74 A7,7 0 0 1 71,81 H37 A7,7 0 0 1 30,74 V38 A7,7 0 0 1 37,31 Z"
+        android:fillColor="#FFFFFFFF" />
+
+    <!-- 文本：两条横线 -->
+    <path
+        android:pathData="M43,39.5 H65 A3,3 0 0 1 68,42.5 V42.5 A3,3 0 0 1 65,45.5 H43 A3,3 0 0 1 40,42.5 V42.5 A3,3 0 0 1 43,39.5 Z"
+        android:fillColor="#FF2C6FBF" />
+    <path
+        android:pathData="M43,49.5 H55 A3,3 0 0 1 58,52.5 V52.5 A3,3 0 0 1 55,55.5 H43 A3,3 0 0 1 40,52.5 V52.5 A3,3 0 0 1 43,49.5 Z"
+        android:fillColor="#FF2C6FBF" />
+
+    <!-- 图片：小方框 + 白色山峰与太阳 -->
+    <path
+        android:pathData="M43.5,59.5 H64.5 A3.5,3.5 0 0 1 68,63 V69 A3.5,3.5 0 0 1 64.5,72.5 H43.5 A3.5,3.5 0 0 1 40,69 V63 A3.5,3.5 0 0 1 43.5,59.5 Z"
+        android:fillColor="#FF2C6FBF" />
+    <path
+        android:pathData="M43,70 L52,61 L61,70 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M61.1,63.5 A1.9,1.9 0 1 1 64.9,63.5 A1.9,1.9 0 1 1 61.1,63.5 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

@@ -95,6 +95,30 @@ object SyncEngine {
         doConnect()
     }
 
+    /**
+     * 看门狗用：持有者还在，但连接确实断了，就主动补一次。
+     *
+     * 为什么需要它：正常断线由 [scheduleReconnect] 的指数退避负责，但那个协程
+     * 跑在进程内 —— 进程被系统冻结/回收时它一并消失，退避链就断了。
+     * 此时引用计数仍大于 0（服务还"在"），`acquire` 不会重新触发连接，
+     * 于是表现为"服务活着，但一直连不上"。这里补上这一环。
+     *
+     * 已经有退避任务在跑时不插手，避免和正常重连打架。
+     */
+    fun ensureConnected() {
+        synchronized(lock) {
+            if (refCount.get() == 0) return
+            if (reconnectJob?.isActive == true) return
+        }
+        if (ClipClient.connected) return
+
+        Log.i(TAG, "看门狗补连：当前未连接且无重连任务，主动重连一次")
+        StatusHolder.addDiag("看门狗补连：主动重连一次")
+        if (scope == null) setScope()
+        attempt = 0
+        doConnect()
+    }
+
     private fun setScope() {
         scope?.cancel()
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())

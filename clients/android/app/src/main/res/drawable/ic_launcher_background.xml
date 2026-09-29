@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的背景层：整块品牌蓝，带一点斜向渐变免得大面积纯色发闷。
+  自适应图标会被启动器按自己的形状裁切（圆/方/水滴…），所以背景必须铺满 108x108，
+  不能自己画圆角 —— 圆角由系统裁出来。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path android:pathData="M0,0 H108 V108 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108">
+                <item android:offset="0" android:color="#FF5AA0E8" />
+                <item android:offset="1" android:color="#FF2B6CBC" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

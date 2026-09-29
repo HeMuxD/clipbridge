@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的前景层：白色剪贴板 + 中间「文本 + 图片」二合一标记。
+
+  构图：
+    · 基底沿用原来的蓝色剪贴板造型（板身 + 顶部夹子）
+    · 板身里放两短一长的横线表示「文本」，下面一个带山与日的小方框表示「图片」
+    · 标记用品牌蓝 #2C6FBF 画成"挖空"效果，与白底形成清晰对比
+
+  ⚠️ 自适应图标的安全区是以中心为圆心、直径 66dp 的圆（即半径 33）。
+     超出这个范围的部分在圆形遮罩下会被裁掉，所以所有图形都控制在 33 以内 ——
+     板身右下角到中心的距离约 32.6，已经在极限，不要再往外扩。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 顶部夹子 -->
+    <path
+        android:pathData="M49,25 H59 A4,4 0 0 1 63,29 V31 A4,4 0 0 1 59,35 H49 A4,4 0 0 1 45,31 V29 A4,4 0 0 1 49,25 Z"
+        android:fillColor="#FFFFFFFF" />
+
+    <!-- 剪贴板板身 -->
+    <path
+        android:pathData="M39,33 H69 A6,6 0 0 1 75,39 V73 A6,6 0 0 1 69,79 H39 A6,6 0 0 1 33,73 V39 A6,6 0 0 1 39,33 Z"
+        android:fillColor="#FFFFFFFF" />
+
+    <!-- 文本：两条横线，一长一短 -->
+    <path
+        android:pathData="M43.5,41 H64.5 A2.5,2.5 0 0 1 67,43.5 V43.5 A2.5,2.5 0 0 1 64.5,46 H43.5 A2.5,2.5 0 0 1 41,43.5 V43.5 A2.5,2.5 0 0 1 43.5,41 Z"
+        android:fillColor="#FF2C6FBF" />
+    <path
+        android:pathData="M43.5,50 H56.5 A2.5,2.5 0 0 1 59,52.5 V52.5 A2.5,2.5 0 0 1 56.5,55 H43.5 A2.5,2.5 0 0 1 41,52.5 V52.5 A2.5,2.5 0 0 1 43.5,50 Z"
+        android:fillColor="#FF2C6FBF" />
+
+    <!-- 图片：小方框，内含白色山峰与太阳 -->
+    <path
+        android:pathData="M44,59 H64 A3,3 0 0 1 67,62 V69 A3,3 0 0 1 64,72 H44 A3,3 0 0 1 41,69 V62 A3,3 0 0 1 44,59 Z"
+        android:fillColor="#FF2C6FBF" />
+    <path
+        android:pathData="M43.5,69.5 L52,60.5 L60.5,69.5 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M60.7,63 A1.8,1.8 0 1 1 64.3,63 A1.8,1.8 0 1 1 60.7,63 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

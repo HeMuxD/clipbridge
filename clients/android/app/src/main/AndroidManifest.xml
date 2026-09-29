@@ -4,11 +4,16 @@
 
   数据流：
     · 上行（本机复制 → 电脑）：无障碍服务感知复制动作，见 ClipboardAccessibilityService
-    · 下行（电脑复制/截图 → 本机）：直接把内容写进系统剪贴板，全程无通知、无操作
+    · 下行（电脑复制/截图 → 本机）：直接把内容写进系统剪贴板，全程无操作提示
     · 兜底上行：系统分享菜单（ACTION_SEND），零权限，100% 可靠
 
   注意：Android 10+ 后台应用无法读取剪贴板，且没有任何权限可以申请。
   无障碍服务是唯一免 Root 的自动上行方案 —— 详见 docs/可行性报告.md 第 3.2 节。
+
+  保活结构（两层，互相兜底）：
+    · ClipboardAccessibilityService —— 零通知，只要用户在系统设置里开着它就有效
+    · SyncService（后台保护）—— 前台服务，带一条常驻通知，抗 ROM 掐后台
+    两者的连接由 SyncEngine 引用计数管理：谁在，连接就在；都退出才断开。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -17,14 +22,21 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- ========== 可选的前台服务保活 ==========
-         默认不使用后台常驻通知；只有用户主动打开「常驻通知保活」时才会启动。
-         Android 14+ 要求声明具体类型，否则 startForeground 抛 SecurityException。 -->
+    <!-- ========== 后台保护（前台服务）==========
+         前台服务必须有具体类型，否则 startForeground 在 Android 14+ 抛 SecurityException。
+         targetSdk 保持 34：Android 15 对 dataSync 类型加了 6 小时/24 小时时长上限，
+         只在 targetSdk >= 35 时生效，降到 34 可避开 —— 实时同步被定时掐断是致命的。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
-    <!-- 只有开启保活时才需要（Android 13+ 运行时申请） -->
+    <!-- 通知权限（Android 13+ 运行时申请）。没有它前台服务照样跑，只是通知不可见。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- ========== 后台保护的恢复手段 ==========
+         开机广播：手机重启后自动把服务拉起来，否则重启后就一直离线。
+         电池优化白名单：不进白名单的话，Doze 会静默掐掉后台网络。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- ========== 截图上行（可选功能，默认关闭） ==========
          Android 10 起分区存储，只能通过 MediaStore 感知相册里的新截图，
@@ -39,14 +51,15 @@
     <application
         android:name=".ClipBridgeApp"
         android:allowBackup="false"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.ClipBridge"
         android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="34">
 
-        <!-- ========== 主界面（配对 + 状态 + 无障碍引导） ========== -->
+        <!-- ========== 主界面（配对 + 状态 + 权限引导） ========== -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -58,10 +71,10 @@
             </intent-filter>
         </activity>
 
-        <!-- ========== 无障碍服务：无感同步的核心 ==========
+        <!-- ========== 无障碍服务：上行感知的核心 ==========
              它同时承担两件事：
                1. 感知用户复制了什么（上行）
-               2. 作为同步长连接的保活载体 —— 因此不需要前台服务，也就没有任何常驻通知
+               2. 作为同步长连接的保活载体之一 —— 零通知
              ⚠️ 厂商 ROM 差异大：部分系统会定时关闭无障碍服务，
                 所以 App 内必须做「是否仍在运行」的定期自检（MainActivity 里已实现）。 -->
         <service
@@ -77,13 +90,38 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- ========== 可选的前台服务保活 ==========
-             默认不启动。部分国产 ROM 会掐掉没有前台身份的后台进程，
-             用户可在设置里打开，代价是通知栏里会多一条静默通知。 -->
+        <!-- ========== 后台保护（前台服务）==========
+             默认开启。代价是通知栏常驻一条静默通知，换来的是：
+               · stopWithTask=false —— 从最近任务划掉 App 时服务不被连带销毁，
+                 连接继续保持着，这才是"划掉后台照样同步"的关键
+               · START_STICKY —— 被系统回收后请求重建
+             返回键退出、划掉卡片都不会中断；只有用户在设置里"强行停止"
+             或手动关掉开关才会停 —— 后者是系统设计，任何 App 都绕不过去。 -->
         <service
             android:name=".service.SyncService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- ========== 看门狗闹钟 ==========
+             闹钟由系统持有，不随进程消亡，因此它是"进程已经被杀"之后
+             唯一还能把服务叫回来的东西。用显式 Intent 触发，
+             故意不声明 intent-filter：外部无法伪造，也不需要。 -->
+        <receiver
+            android:name=".service.KeepAliveReceiver"
+            android:exported="false" />
+
+        <!-- ========== 开机自启 ==========
+             BOOT_COMPLETED / MY_PACKAGE_REPLACED 都是受保护广播（仅系统可发），
+             所以这里 exported=true 是安全的，且能保证 OEM 定制 ROM 也能送达。 -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- ========== 分享菜单接收：兜底上行入口（零权限） ========== -->
         <activity
