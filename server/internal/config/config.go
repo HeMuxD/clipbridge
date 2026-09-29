@@ -36,6 +36,19 @@ type StorageConfig struct {
 }
 
 type AuthConfig struct {
+	// PairCode 非空时作为【固定配对码】使用：永久有效，可被多台设备重复使用。
+	// 适合"手机、平板、笔记本都要配，不想每次去日志里翻码"的场景。
+	// 留空则启动时随机生成，位数与有效期由下面两项决定。
+	// 建议通过环境变量 CLIPBRIDGE_PAIR_CODE 注入（.env 已限制为 600 权限）。
+	//
+	// ⚠️ 泄漏风险：固定码一旦被看到就长期有效，所以务必保留 /api/pair 的按 IP 限流。
+	// 换码方式：改这里（或改 .env）后重启服务端。
+	PairCode string `yaml:"pair_code"`
+	// PairCodeLength 随机生成时的位数，默认 8（1 亿种组合）。
+	PairCodeLength int `yaml:"pair_code_length"`
+	// PairCodeTTL 随机生成码的有效期（秒）；<=0 表示永不过期
+	// （与 max_disk_usage: 0 = 无限制 的约定一致）。
+	// 配置了 PairCode 时本项被忽略。
 	PairCodeTTL  int    `yaml:"pair_code_ttl"`
 	TokenTTLDays int    `yaml:"token_ttl_days"`
 	JWTSecret    string `yaml:"jwt_secret"`
@@ -79,8 +92,10 @@ func Default() *Config {
 			MaxDiskUsage:       20 << 30,
 		},
 		Auth: AuthConfig{
-			PairCodeTTL:  600,
-			TokenTTLDays: 365,
+			// 8 位而不是 6 位：位数越多，"长期有效"越安全（见 AuthConfig.PairCode 的说明）
+			PairCodeLength: 8,
+			PairCodeTTL:    600,
+			TokenTTLDays:   365,
 		},
 		Limits: LimitsConfig{
 			MaxConnPerDevice:     3,
@@ -130,6 +145,15 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("CLIPBRIDGE_OFFLINE_REPLAY_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.Limits.OfflineReplaySeconds = n
+		}
+	}
+	// 固定配对码。放 .env 里（已 600 权限）比写进 config.yaml 更顺手。
+	if v := os.Getenv("CLIPBRIDGE_PAIR_CODE"); v != "" {
+		cfg.Auth.PairCode = v
+	}
+	if v := os.Getenv("CLIPBRIDGE_PAIR_CODE_LENGTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Auth.PairCodeLength = n
 		}
 	}
 

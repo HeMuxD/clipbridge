@@ -34,6 +34,9 @@ type Server struct {
 	hub   *hub.Hub
 	log   *slog.Logger
 	rl    *rateLimiter
+	// pairRL 按来源 IP 限制 /api/pair 的尝试次数。
+	// 与 rl 分开是必须的：rl 按 deviceId 计数，而配对恰恰发生在拿到 deviceId 之前。
+	pairRL *rateLimiter
 
 	upgrader websocket.Upgrader
 	// 服务端侧敏感内容过滤规则
@@ -43,12 +46,13 @@ type Server struct {
 // New 构造 Server
 func New(cfg *config.Config, st *store.Store, am *auth.Manager, h *hub.Hub, log *slog.Logger) *Server {
 	s := &Server{
-		cfg:   cfg,
-		store: st,
-		auth:  am,
-		hub:   h,
-		log:   log,
-		rl:    newRateLimiter(cfg.Storage.RateLimitPerMinute),
+		cfg:    cfg,
+		store:  st,
+		auth:   am,
+		hub:    h,
+		log:    log,
+		rl:     newRateLimiter(cfg.Storage.RateLimitPerMinute),
+		pairRL: newRateLimiter(pairRateLimitPerMinute),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -192,11 +196,55 @@ type pairRequest struct {
 	Platform   string `json:"platform"`
 }
 
-// handlePair 用一次性配对码换取长期 Token。
-// 配对成功后配对码立即作废，需在服务端手动轮换才会生成新的。
+// pairRateLimitPerMinute 是 /api/pair 每个来源 IP 每分钟允许的尝试次数。
+//
+// 必须限流的原因：配对码只有 6 位数字，而且在有效期内【可以重复使用】（见 handlePair 说明）。
+// 10 次/分钟意味着穷举 100 万种组合约需 69 天，远长于配对码本身的有效期，
+// 所以"可重复使用"带来的额外风险被这个上限压住了。
+const pairRateLimitPerMinute = 10
+
+// clientIP 取出请求的真实来源 IP，用于按 IP 限流。
+//
+// 生产部署里 Go 进程前面有一层 Nginx，此时 r.RemoteAddr 恒为 Nginx 的回环地址，
+// 直接按它限流等于把所有客户端合并成同一个桶。所以优先读 Nginx 注入的头
+// （见 nginx.http.conf.template / nginx.https.conf.template 里的 X-Real-IP 与 X-Forwarded-For）。
+func clientIP(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+		return v
+	}
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		// X-Forwarded-For 形如 "client, proxy1, proxy2"，最左边那个才是真实客户端
+		if i := strings.IndexByte(v, ','); i >= 0 {
+			v = v[:i]
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// handlePair 用配对码换取长期 Token。
+//
+// 配对码在有效期内【可以重复使用】，不会一配对成功就作废。
+// 理由：一个家庭通常有多台设备（笔记本 + 手机 + 平板），一次性配对码会逼着用户
+// 每加一台设备就重启一次服务端 —— 而配对码存在进程内存里，没有别的换码途径。
+// 代价是有效期内的暴力枚举窗口，所以这里配合了按来源 IP 的限流（pairRateLimitPerMinute）。
+//
+// 想立刻换码：重启进程即可（配对码是进程内存态，会随启动重新生成）。
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, model.ErrInternal, "仅支持 POST")
+		return
+	}
+
+	ip := clientIP(r)
+	if !s.pairRL.Allow(ip) {
+		s.log.Warn("配对请求被限流", "ip", ip)
+		writeErr(w, http.StatusTooManyRequests, model.ErrRateLimited, "尝试过于频繁，请稍后再试")
 		return
 	}
 
@@ -211,9 +259,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 配对码使用后作废，避免被重复利用
-	if err := s.auth.VerifyPairCode(req.PairCode, true); err != nil {
-		s.log.Warn("配对失败", "deviceId", req.DeviceID, "reason", err)
+	// consume=false：有效期内可重复使用，多台设备用同一个码配对。
+	// 防爆破由上面的 pairRL 负责，不要改回 true —— 那会让第二台设备必然配不上。
+	if err := s.auth.VerifyPairCode(req.PairCode, false); err != nil {
+		s.log.Warn("配对失败", "deviceId", req.DeviceID, "ip", ip, "reason", err)
 		writeErr(w, http.StatusUnauthorized, model.ErrDeviceNotPaired, "配对码无效或已过期")
 		return
 	}

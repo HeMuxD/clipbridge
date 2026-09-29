@@ -24,7 +24,12 @@ storage:
   max_disk_usage: 21474836480
 
 auth:
-  # 配对码有效时长（秒）
+  # 固定配对码（8 位数字）。填了就永久有效、可被多台设备重复使用；
+  # 留空则按下面两项随机生成。也可用环境变量 CLIPBRIDGE_PAIR_CODE 注入（优先级更高）。
+  pair_code: ""
+  # 随机码位数，默认 8（1 亿种组合）
+  pair_code_length: 8
+  # 随机码有效时长（秒）；<=0 表示永不过期。配置了 pair_code 时本项无意义。
   pair_code_ttl: 600
   # Token 有效天数
   token_ttl_days: 365

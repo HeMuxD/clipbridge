@@ -32,7 +32,9 @@ func main() {
 	var (
 		cfgPath    = flag.String("config", "config.yaml", "配置文件路径")
 		showVer    = flag.Bool("version", false, "打印版本号并退出")
-		rotateCode = flag.Bool("rotate-code", false, "仅生成一个新的配对码并退出")
+		rotateCode = flag.Bool("rotate-code", false,
+			"仅打印一个新的配对码并退出。注意：配对码是运行中进程的内存状态，"+
+				"独立进程生成的码对正在运行的服务无效；要真正换码请重启服务进程")
 	)
 	flag.Parse()
 
@@ -73,14 +75,21 @@ func run(cfgPath string, rotateOnly bool, baseLog *slog.Logger) error {
 
 	am := auth.NewManager(
 		cfg.Auth.JWTSecret,
-		time.Duration(cfg.Auth.PairCodeTTL)*time.Second,
+		auth.PairCodePolicy{
+			FixedCode: cfg.Auth.PairCode,
+			Length:    cfg.Auth.PairCodeLength,
+			TTL:       time.Duration(cfg.Auth.PairCodeTTL) * time.Second,
+		},
 		time.Duration(cfg.Auth.TokenTTLDays)*24*time.Hour,
 	)
 
 	code, expiresAt := am.CurrentPairCode()
 	if rotateOnly {
-		fmt.Printf("新的配对码：%s（有效至 %s）\n",
-			code, expiresAt.Format("2006-01-02 15:04:05"))
+		if expiresAt.IsZero() {
+			fmt.Printf("当前配对码：%s（配置的固定码，永不过期）\n", code)
+		} else {
+			fmt.Printf("当前配对码：%s（有效至 %s）\n", code, expiresAt.Format("2006-01-02 15:04:05"))
+		}
 		return nil
 	}
 
@@ -170,13 +179,17 @@ func newLogger(level string) *slog.Logger {
 
 // printPairCodeBanner 醒目地打印配对码，方便用户从日志里一眼找到
 func printPairCodeBanner(code string, expiresAt time.Time) {
+	valid := "有效至 " + expiresAt.Format("2006-01-02 15:04:05")
+	if expiresAt.IsZero() {
+		valid = "固定码，永久有效（可多台设备重复使用）"
+	}
 	banner := `
 ============================================================
-                    配对码（首次配对使用）
+                    配对码（可多台设备重复使用）
                         %s
-              有效至 %s
+                 %s
 ============================================================
 `
-	fmt.Printf(banner, code, expiresAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf(banner, code, valid)
 	fmt.Println()
 }

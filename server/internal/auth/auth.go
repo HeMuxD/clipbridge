@@ -21,59 +21,112 @@ var (
 	ErrInvalidToken = errors.New("Token 无效或已过期")
 )
 
-// PairCode 是一次性配对码及其有效期。
-// 服务端启动时生成一个，客户端首次配对时使用。
+// DefaultPairCodeLength 是自动生成配对码时的默认位数。
+// 8 位 = 1 亿种组合，配合 /api/pair 的按 IP 限流（10 次/分钟），
+// 穷举一遍要约 19 年 —— 这正是"配对码可以长期有效"的前提。
+const DefaultPairCodeLength = 8
+
+// PairCode 是当前的配对码及其有效期。
+//
+// ExpiresAt 为零值表示【永不过期】（配置了固定码时就是这种情况）。
+// 有效期内可被多台设备重复使用，防爆破由 api 层的按 IP 限流负责。
 type PairCode struct {
 	Code      string
 	ExpiresAt time.Time
+}
+
+// expired 判断配对码是否已失效。零值 ExpiresAt 视为永不过期。
+func (p *PairCode) expired(now time.Time) bool {
+	return !p.ExpiresAt.IsZero() && now.After(p.ExpiresAt)
+}
+
+// IsPermanent 报告当前配对码是否永不过期（用于日志措辞）。
+func (p *PairCode) IsPermanent() bool {
+	return p != nil && p.ExpiresAt.IsZero()
+}
+
+// PairCodePolicy 决定配对码从哪里来。
+type PairCodePolicy struct {
+	// FixedCode 非空时直接用它：不随机生成、不设过期时间（永久有效）。
+	// 用途：多台设备（手机、平板、笔记本）随时配对，不必每次去日志里翻码，
+	// 也不必为了加一台设备而重启服务端。
+	//
+	// 代价：这个码一旦泄露就长期有效，所以【必须】配合按来源 IP 的防爆破限流。
+	// 要换码：改配置后重启服务端。
+	FixedCode string
+
+	// Length 是自动生成时的位数；<=0 时取 DefaultPairCodeLength。
+	Length int
+
+	// TTL 是自动生成码的有效期；<=0 表示永不过期。
+	// 配置了 FixedCode 时忽略本字段。
+	TTL time.Duration
 }
 
 // Manager 负责配对码与 Token 的签发校验。
 // Token 采用 HMAC-SHA256 签名，格式为 base64url(deviceID).hex(签名)，
 // 避免引入重量级 JWT 依赖，同时保留“带过期时间 + 可校验”的能力。
 type Manager struct {
-	secret      []byte
-	tokenTTL    time.Duration
-	pairCodeTTL time.Duration
+	secret   []byte
+	tokenTTL time.Duration
+	policy   PairCodePolicy
 
 	mu       sync.RWMutex
 	pairCode *PairCode
 }
 
 // NewManager 创建鉴权管理器
-func NewManager(secret string, pairCodeTTL, tokenTTL time.Duration) *Manager {
+func NewManager(secret string, policy PairCodePolicy, tokenTTL time.Duration) *Manager {
+	if policy.Length <= 0 {
+		policy.Length = DefaultPairCodeLength
+	}
 	m := &Manager{
-		secret:      []byte(secret),
-		tokenTTL:    tokenTTL,
-		pairCodeTTL: pairCodeTTL,
+		secret:   []byte(secret),
+		tokenTTL: tokenTTL,
+		policy:   policy,
 	}
 	m.RotatePairCode()
 	return m
 }
 
-// RotatePairCode 生成新的 6 位配对码，旧码立即失效
+// RotatePairCode 重新确定当前配对码并返回。
+//
+// 配置了 FixedCode 时返回的就是那个固定码（它本身即永久有效，无"轮换"概念，
+// 要换码请改配置后重启）；否则随机生成一个新码。
 func (m *Manager) RotatePairCode() string {
-	code := randomDigits(6)
-	m.mu.Lock()
-	m.pairCode = &PairCode{
-		Code:      code,
-		ExpiresAt: time.Now().Add(m.pairCodeTTL),
+	code := m.policy.FixedCode
+	var expiresAt time.Time
+	if code == "" {
+		code = randomDigits(m.policy.Length)
+		if m.policy.TTL > 0 {
+			expiresAt = time.Now().Add(m.policy.TTL)
+		}
 	}
+	m.mu.Lock()
+	m.pairCode = &PairCode{Code: code, ExpiresAt: expiresAt}
 	m.mu.Unlock()
 	return code
 }
 
-// CurrentPairCode 返回当前有效的配对码，若已过期则返回空字符串
+// CurrentPairCode 返回当前有效的配对码与有效期。
+// 永不过期的码返回零值时间，调用方需据此调整展示措辞。
 func (m *Manager) CurrentPairCode() (string, time.Time) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.pairCode == nil || time.Now().After(m.pairCode.ExpiresAt) {
+	if m.pairCode == nil || m.pairCode.expired(time.Now()) {
 		return "", time.Time{}
 	}
 	return m.pairCode.Code, m.pairCode.ExpiresAt
 }
 
-// VerifyPairCode 校验配对码。成功后可选择是否立即作废该码。
+// VerifyPairCode 校验配对码。
+//
+// consume=true 时校验通过即作废该码（一次性语义）；
+// consume=false 时在有效期内可反复使用 —— 多台设备（手机、平板、笔记本）
+// 用同一个码依次配对，不必每加一台就重启服务端。
+//
+// 选 false 的调用方必须自己做防爆破限流：配对码只有 6 位数字，
+// 可重复使用会把暴力枚举窗口拉长到整个有效期。
 func (m *Manager) VerifyPairCode(code string, consume bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -81,7 +134,7 @@ func (m *Manager) VerifyPairCode(code string, consume bool) error {
 	if m.pairCode == nil {
 		return ErrInvalidPairCode
 	}
-	if time.Now().After(m.pairCode.ExpiresAt) {
+	if m.pairCode.expired(time.Now()) {
 		return ErrInvalidPairCode
 	}
 	// 常量时间比较，避免时序侧信道

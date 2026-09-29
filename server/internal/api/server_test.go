@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,7 +37,9 @@ func newTestServer(t *testing.T) *Server {
 	cfg.Storage.FileDir = files
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(cfg, st, auth.NewManager("test-secret", time.Minute, time.Hour), hub.New(log), log)
+	return New(cfg, st,
+		auth.NewManager("test-secret", auth.PairCodePolicy{TTL: time.Minute}, time.Hour),
+		hub.New(log), log)
 }
 
 // TestStatusWriterKeepsHijacker 是 WebSocket 能否工作的前提。
@@ -257,5 +260,120 @@ func TestOfflineReplayExpiredEntriesAreDropped(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Fatalf("已过期的队列项不应被投递，实际 %d 条", len(pending))
+	}
+}
+
+// ---------- 配对码：多设备复用 + 按 IP 防爆破 ----------
+
+// pairOnce 发一次配对请求。ip 非空时以 X-Real-IP 注入，模拟 Nginx 前置的真实场景。
+func pairOnce(t *testing.T, s *Server, code, deviceID, ip string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"pairCode":%q,"deviceId":%q,"deviceName":%q,"platform":"android"}`,
+		code, deviceID, deviceID)
+	req := httptest.NewRequest(http.MethodPost, "/api/pair", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if ip != "" {
+		req.Header.Set("X-Real-IP", ip)
+	}
+	rec := httptest.NewRecorder()
+	s.handlePair(rec, req)
+	return rec
+}
+
+// TestPairAllowsMultipleDevices 是本次修复的核心回归测试。
+//
+// 曾经的语义是"配对成功即作废"，导致第二台设备必然拿到
+// "配对码无效或已过期"，用户只能重启服务端换码 —— 多设备用户每次都要踩一次。
+func TestPairAllowsMultipleDevices(t *testing.T) {
+	s := newTestServer(t)
+	code, _ := s.auth.CurrentPairCode()
+
+	for _, dev := range []string{"phone-a", "phone-b", "windows-pc"} {
+		rec := pairOnce(t, s, code, dev, "203.0.113.7")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("设备 %s 配对失败：HTTP %d，响应=%s", dev, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"token"`) {
+			t.Fatalf("设备 %s 的响应里没有 token：%s", dev, rec.Body.String())
+		}
+	}
+
+	devices, err := s.store.ListDevices()
+	if err != nil {
+		t.Fatalf("查询设备失败: %v", err)
+	}
+	if len(devices) != 3 {
+		t.Fatalf("三台设备都应落库，实际 %d 台", len(devices))
+	}
+}
+
+// TestPairRateLimitedPerIP 确认按来源 IP 的限流生效。
+//
+// 这是"配对码可以重复使用"的安全前提：配对码只有几位数字，
+// 没有限流的话公网上的暴力枚举在几分钟内就能撞开。
+func TestPairRateLimitedPerIP(t *testing.T) {
+	s := newTestServer(t)
+	code, _ := s.auth.CurrentPairCode()
+
+	const ip = "198.51.100.9"
+	limited := false
+	for i := 0; i < pairRateLimitPerMinute+3; i++ {
+		rec := pairOnce(t, s, code, fmt.Sprintf("dev-%d", i), ip)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatalf("同一 IP 连续尝试超过 %d 次后应被限流", pairRateLimitPerMinute)
+	}
+
+	// 限流是按 IP 的，换个来源不应被同一把锁拦住
+	if rec := pairOnce(t, s, code, "other-device", "198.51.100.10"); rec.Code != http.StatusOK {
+		t.Fatalf("不同来源 IP 不应受影响，实际 HTTP %d", rec.Code)
+	}
+}
+
+// TestPairRejectsWrongCode 确认错误/缺失的配对码仍然被拒
+func TestPairRejectsWrongCode(t *testing.T) {
+	s := newTestServer(t)
+	code, _ := s.auth.CurrentPairCode()
+
+	wrong := "00000000"
+	if code == wrong {
+		wrong = "11111111"
+	}
+	if rec := pairOnce(t, s, wrong, "dev-x", "203.0.113.20"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("错误配对码应返回 401，实际 %d", rec.Code)
+	}
+	if rec := pairOnce(t, s, code, "", "203.0.113.20"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("deviceId 为空应返回 400，实际 %d", rec.Code)
+	}
+}
+
+// TestClientIP 覆盖限流的取 IP 逻辑。
+// 生产环境 Go 进程前面有 Nginx，r.RemoteAddr 恒为回环地址 ——
+// 若只看它，所有客户端会被合并成同一个限流桶。
+func TestClientIP(t *testing.T) {
+	cases := []struct {
+		name, realIP, xff, remoteAddr, want string
+	}{
+		{"X-Real-IP 优先", "203.0.113.1", "198.51.100.2, 10.0.0.1", "127.0.0.1:1234", "203.0.113.1"},
+		{"回退到 X-Forwarded-For 最左值", "", "198.51.100.2, 10.0.0.1", "127.0.0.1:1234", "198.51.100.2"},
+		{"再回退到 RemoteAddr", "", "", "203.0.113.9:5555", "203.0.113.9"},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/api/pair", nil)
+		req.RemoteAddr = c.remoteAddr
+		if c.realIP != "" {
+			req.Header.Set("X-Real-IP", c.realIP)
+		}
+		if c.xff != "" {
+			req.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := clientIP(req); got != c.want {
+			t.Errorf("%s：clientIP = %q，期望 %q", c.name, got, c.want)
+		}
 	}
 }

@@ -158,7 +158,7 @@ sequenceDiagram
 - ✅ 历史记录自动过期（默认 7 天）
 - ✅ **单镜像**部署：Go 二进制与 Nginx 打在同一个镜像里，一条命令起服务
 - ✅ SQLite 零运维，纯 Go 驱动，可静态编译、可交叉编译
-- ✅ 配对码一次性 + HMAC Token 鉴权 + 每设备限流
+- ✅ 配对码支持多台设备复用（也可配置永久固定码）+ HMAC Token 鉴权 + 每设备限流
 
 ---
 
@@ -176,7 +176,7 @@ cp .env.example .env
 #   CLIPBRIDGE_PUBLIC_BASE_URL  → https://<域名>:8443  （必须带端口）
 #   CLIPBRIDGE_JWT_SECRET       → openssl rand -hex 32
 docker compose up -d --build
-docker compose logs -f clipbridge   # 这里会打印一次性配对码
+docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
 ```
 
 **端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
