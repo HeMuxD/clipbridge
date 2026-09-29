@@ -140,38 +140,16 @@ internal sealed class TrayApplication : ApplicationContext
     }
 
     /// <summary>
-    /// 手动触发一次剪贴板同步。
-    /// 用于某些场景：监听因故漏掉了事件，或用户想强制重发当前内容。
+    /// 手动触发一次剪贴板同步：把此刻剪贴板里的内容直接发出去。
+    /// 用于监听漏掉事件、或用户想强制重发当前内容的场景。
     /// </summary>
     private void ForceSyncNow()
     {
         RunOnUi(() =>
         {
-            try
-            {
-                if (!Clipboard.ContainsText() && !Clipboard.ContainsImage())
-                {
-                    Notify("ClipBridge", "剪贴板为空，没有可同步的内容");
-                    return;
-                }
-
-                // 走一次读取并发送，绕过"已存在则跳过"的判断：
-                // 先把哈希从缓存移除，再交给正常流程处理
-                var text = Clipboard.ContainsText() ? Clipboard.GetText() : null;
-                if (!string.IsNullOrEmpty(text))
-                {
-                    var hash = Hashing.Sha256Hex(text);
-                    // HashCache 没有公开的 Remove，这里通过 Consume 达成同样效果
-                    Log.Info($"手动同步文本（{text.Length} 字）");
-                }
-
-                _orchestrator.Reload();
-                Notify("ClipBridge", "已触发重新同步");
-            }
-            catch (Exception ex)
-            {
-                Log.Error("手动同步失败", ex);
-            }
+            // 读取剪贴板必须在 UI（STA）线程上做，所以这里同步调用；
+            // 发送过程本身是异步的，不阻塞界面。
+            _ = _orchestrator.ForceSyncNowAsync();
         });
     }
 

@@ -1,0 +1,39 @@
+# 构建上下文排除清单（上下文根 = 仓库根目录）
+#
+# 单镜像构建会把整个仓库作为上下文，因此必须显式排掉这几类体积大、
+# 且绝不该进镜像的内容。
+
+# 版本控制
+.git/
+.gitignore
+
+# 服务端运行时数据：SQLite 库 + 用户图片，必须排除，
+# 否则会被 COPY 固化进镜像层（体积失控 + 用户数据外泄）
+server/data/
+server/dist/
+server/clipbridge
+server/clipbridge.exe
+server/config.yaml
+
+# Android 构建产物（体积巨大）
+clients/android/.gradle/
+clients/android/build/
+clients/android/app/build/
+clients/android/local.properties
+clients/android/.idea/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Windows 客户端构建产物
+clients/windows/src/bin/
+clients/windows/src/obj/
+
+# 其他
+**/*.log
+*~
+.DS_Store
+Thumbs.db
+deploy/docker/.env
+certs/

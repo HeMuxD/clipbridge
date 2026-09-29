@@ -14,6 +14,7 @@ import (
 	"github.com/clipbridge/server/internal/auth"
 	"github.com/clipbridge/server/internal/config"
 	"github.com/clipbridge/server/internal/hub"
+	"github.com/clipbridge/server/internal/model"
 	"github.com/clipbridge/server/internal/store"
 )
 
@@ -157,5 +158,104 @@ func TestHandleFileServesExistingImage(t *testing.T) {
 	}
 	if got := rec.Body.Bytes(); string(got) != string(content) {
 		t.Fatalf("内容不一致：%q", got)
+	}
+}
+
+// ---------- 「只同步当前这一次操作」 ----------
+
+// 造一个已配对但当前离线的设备
+func addOfflineDevice(t *testing.T, s *Server, id string) {
+	t.Helper()
+	err := s.store.UpsertDevice(&model.Device{
+		DeviceID:   id,
+		DeviceName: id,
+		Platform:   "android",
+		TokenHash:  "deadbeef",
+		PairedAt:   time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("写入设备失败: %v", err)
+	}
+}
+
+// 存一条内容，返回自增 ID
+func saveTestClip(t *testing.T, s *Server) int64 {
+	t.Helper()
+	id, err := s.store.SaveClip(&model.Clip{
+		MsgID:     "msg-1",
+		Hash:      "hash-1",
+		Kind:      model.KindText,
+		Origin:    model.OriginClipboard,
+		SrcDevice: "sender",
+		SrcName:   "发送端",
+		Text:      "hello",
+		CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("保存内容失败: %v", err)
+	}
+	return id
+}
+
+// TestOfflineReplayDisabledByDefault 是「以往的复制或截图不管」的回归测试：
+// 默认补推窗口为 0，离线设备不该被入队，上线时也拿不到旧内容。
+func TestOfflineReplayDisabledByDefault(t *testing.T) {
+	s := newTestServer(t)
+
+	if s.cfg.Limits.OfflineReplaySeconds != 0 {
+		t.Fatalf("默认补推窗口应为 0，实际为 %d", s.cfg.Limits.OfflineReplaySeconds)
+	}
+
+	addOfflineDevice(t, s, "offline-dev")
+	clipID := saveTestClip(t, s)
+
+	s.enqueueForOffline(clipID, "sender")
+
+	pending, err := s.store.DrainPending("offline-dev")
+	if err != nil {
+		t.Fatalf("读取离线队列失败: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("补推关闭时不应入队，实际有 %d 条", len(pending))
+	}
+}
+
+// TestOfflineReplayWindowEnqueues 打开补推窗口后，离线设备应能拿到内容
+func TestOfflineReplayWindowEnqueues(t *testing.T) {
+	s := newTestServer(t)
+	s.cfg.Limits.OfflineReplaySeconds = 60
+
+	addOfflineDevice(t, s, "offline-dev")
+	clipID := saveTestClip(t, s)
+
+	s.enqueueForOffline(clipID, "sender")
+
+	pending, err := s.store.DrainPending("offline-dev")
+	if err != nil {
+		t.Fatalf("读取离线队列失败: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("补推开启时应入队 1 条，实际 %d 条", len(pending))
+	}
+}
+
+// TestOfflineReplayExpiredEntriesAreDropped 验证"补推窗口之外的内容会被自然丢弃"：
+// 入队 TTL 取的就是补推窗口，过期的记录在 DrainPending 时被过滤掉。
+func TestOfflineReplayExpiredEntriesAreDropped(t *testing.T) {
+	s := newTestServer(t)
+	// 窗口取负数，等价于"入队即过期"
+	s.cfg.Limits.OfflineReplaySeconds = -1
+
+	addOfflineDevice(t, s, "offline-dev")
+	clipID := saveTestClip(t, s)
+
+	s.enqueueForOffline(clipID, "sender")
+
+	pending, err := s.store.DrainPending("offline-dev")
+	if err != nil {
+		t.Fatalf("读取离线队列失败: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("已过期的队列项不应被投递，实际 %d 条", len(pending))
 	}
 }

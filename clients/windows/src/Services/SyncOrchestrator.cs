@@ -301,6 +301,48 @@ public sealed class SyncOrchestrator : IDisposable
         }
     }
 
+    /// <summary>
+    /// 手动同步一次：把"此刻"剪贴板里的内容直接发出去。
+    ///
+    /// 与自动同步的区别是它不看哈希缓存 —— 用户主动点了菜单，
+    /// 就是明确要把这一次的内容发出去，哪怕它和之前的内容一模一样。
+    /// 必须在 UI（STA）线程上调用。
+    /// </summary>
+    public async Task ForceSyncNowAsync()
+    {
+        ClipboardContent? content;
+        try
+        {
+            content = ClipboardService.ReadCurrent();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("读取剪贴板失败", ex);
+            StatusMessage?.Invoke("读取剪贴板失败");
+            return;
+        }
+
+        if (content is null)
+        {
+            StatusMessage?.Invoke("剪贴板为空，没有可同步的内容");
+            return;
+        }
+
+        // 先记进缓存，避免紧接着的自动监听又把同一条内容上报一次
+        _cache.Add(content.Hash);
+
+        switch (content.Kind)
+        {
+            case ClipKind.Text:
+                await SendTextAsync(content.Text!, ClipOrigin.Manual);
+                break;
+
+            case ClipKind.Image:
+                await SendImageAsync(content.ImagePng!, content.Hash, ClipOrigin.Manual);
+                break;
+        }
+    }
+
     /// <summary>应用设置变更后调用，重启监听以生效</summary>
     public void Reload()
     {

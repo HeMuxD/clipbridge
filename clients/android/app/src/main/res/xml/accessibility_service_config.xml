@@ -2,21 +2,25 @@
 <!--
   无障碍服务配置。
 
-  这个服务的存在理由只有一个：
+  这个服务存在的原因只有一个：
   Android 10 (API 29) 起，除非应用是默认输入法或持有输入焦点，
   否则无法读取剪贴板 —— 这是系统级硬限制，没有任何权限可以申请。
+  无障碍服务是唯一免 Root 的替代路径。
 
-  无障碍服务在系统看来具有全局可见性，是唯一不需要 Root
-  就能在后台感知剪贴板变化的方案。
+  事件类型的取舍：
+    · typeViewTextSelectionChanged —— 用户选中文本，先记下选中内容，
+      供「点了复制但读不到剪贴板」时回退使用
+    · typeViewClicked / typeViewLongClicked —— 识别「复制 / 剪切」菜单项被点中
+    · typeViewFocused —— 焦点变化，顺带碰一次剪贴板
 
-  取舍：本服务不读取屏幕内容、不模拟点击，只监听文本选择事件，
-  以最小权限换取最低的隐私侵入感。
+  本服务不读取屏幕内容、不模拟点击、不采集任何个人信息，
+  只按上述事件类型被动接收通知。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeWindowStateChanged"
+    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeViewClicked|typeViewLongClicked|typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
-    android:notificationTimeout="300"
+    android:notificationTimeout="100"
     android:summary="@string/accessibility_service_summary" />

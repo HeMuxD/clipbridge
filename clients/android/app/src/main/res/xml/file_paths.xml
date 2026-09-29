@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 可暴露的目录。
+  仅 Android 9 及以下会用到：收到的图片先落盘，再以 content:// URI 写进剪贴板。
+-->
+<paths>
+    <files-path
+        name="shared"
+        path="shared/" />
+    <cache-path
+        name="cache"
+        path="." />
+</paths>

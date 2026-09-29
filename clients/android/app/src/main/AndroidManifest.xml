@@ -2,10 +2,13 @@
 <!--
   ClipBridge Android 客户端清单。
 
-  注意事项（详见 docs/可行性报告.md 第 3.2 节）：
-  · Android 14+ 必须为每个前台服务声明 foregroundServiceType 并申请对应权限
-  · Android 10+ 后台无法读剪贴板，无障碍服务是唯一免 Root 的自动上行方案
-  · 分享菜单接收（ACTION_SEND）是最可靠的入口，零权限零限制
+  数据流：
+    · 上行（本机复制 → 电脑）：无障碍服务感知复制动作，见 ClipboardAccessibilityService
+    · 下行（电脑复制/截图 → 本机）：直接把内容写进系统剪贴板，全程无通知、无操作
+    · 兜底上行：系统分享菜单（ACTION_SEND），零权限，100% 可靠
+
+  注意：Android 10+ 后台应用无法读取剪贴板，且没有任何权限可以申请。
+  无障碍服务是唯一免 Root 的自动上行方案 —— 详见 docs/可行性报告.md 第 3.2 节。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -14,40 +17,28 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- ========== 前台服务 ==========
-         Android 14 (API 34) 起，每个前台服务都必须声明类型并申请对应权限，
-         否则 startForeground 会抛 SecurityException。
-         Android 15 (API 35) 起，dataSync 类型有 6 小时/24 小时 上限。 -->
+    <!-- ========== 可选的前台服务保活 ==========
+         默认不使用后台常驻通知；只有用户主动打开「常驻通知保活」时才会启动。
+         Android 14+ 要求声明具体类型，否则 startForeground 抛 SecurityException。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
-    <!-- ========== 通知（Android 13+ 需运行时申请） ========== -->
+    <!-- 只有开启保活时才需要（Android 13+ 运行时申请） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- ========== 保活 ========== -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-
-    <!-- ========== 屏幕捕获（可选功能） ==========
-         MediaProjection 授权在重启后失效，需引导用户重新授权。
-         界面上要把这一点讲清楚，否则用户会以为功能坏了。 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name=".ClipBridgeApp"
         android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.ClipBridge"
         android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="34">
 
-        <!-- ========== 主界面 ========== -->
+        <!-- ========== 主界面（配对 + 状态 + 无障碍引导） ========== -->
         <activity
-            android:name=".ui.MainActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden">
@@ -57,24 +48,17 @@
             </intent-filter>
         </activity>
 
-        <!-- ========== 同步前台服务 ==========
-             维持 WebSocket 长连接。类型选 dataSync。
-             注意 Android 15+ 的时长限制：超时会回调 onTimeout()，
-             此时必须 stopSelf()，并交由 WorkManager 在稍后重启。 -->
-        <service
-            android:name=".service.SyncService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
-        <!-- ========== 无障碍服务 ==========
-             Android 10+ 后台读剪贴板受限，这是唯一免 Root 的自动上行方案。
+        <!-- ========== 无障碍服务：无感同步的核心 ==========
+             它同时承担两件事：
+               1. 感知用户复制了什么（上行）
+               2. 作为同步长连接的保活载体 —— 因此不需要前台服务，也就没有任何常驻通知
              ⚠️ 厂商 ROM 差异大：部分系统会定时关闭无障碍服务，
-             因此 App 内必须做「无障碍服务是否仍在运行」的定期自检。 -->
+                所以 App 内必须做「是否仍在运行」的定期自检（MainActivity 里已实现）。 -->
         <service
             android:name=".service.ClipboardAccessibilityService"
             android:exported="true"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:label="@string/accessibility_service_label">
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
@@ -83,16 +67,15 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- ========== 屏幕捕获服务（可选） ========== -->
+        <!-- ========== 可选的前台服务保活 ==========
+             默认不启动。部分国产 ROM 会掐掉没有前台身份的后台进程，
+             用户可在设置里打开，代价是通知栏里会多一条静默通知。 -->
         <service
-            android:name=".service.ScreenCaptureService"
+            android:name=".service.SyncService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="dataSync" />
 
-        <!-- ========== 分享菜单接收 ==========
-             最可靠的入口：用户在任意界面截图后，
-             选择「分享 → ClipBridge」即可完成同步。
-             零权限、零系统限制、100% 可用。 -->
+        <!-- ========== 分享菜单接收：兜底上行入口（零权限） ========== -->
         <activity
             android:name=".receiver.ShareReceiverActivity"
             android:exported="true"
@@ -105,7 +88,6 @@
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="image/*" />
             </intent-filter>
-            <!-- 支持一次分享多张图 -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -113,29 +95,9 @@
             </intent-filter>
         </activity>
 
-        <!-- ========== 开机自启 ========== -->
-        <receiver
-            android:name=".receiver.BootReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <!-- 部分厂商的开机广播 -->
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-            </intent-filter>
-        </receiver>
-
-        <!-- ========== 网络恢复时重连 ========== -->
-        <receiver
-            android:name=".receiver.NetworkReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
-            </intent-filter>
-        </receiver>
-
-        <!-- FileProvider：用于把接收到的图片分享给其他应用 -->
+        <!-- ========== FileProvider ==========
+             仅用于 Android 9 及以下：把收到的图片暴露成 content:// URI 以便写进剪贴板。
+             Android 10+ 走 MediaStore，不需要它。 -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

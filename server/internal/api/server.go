@@ -582,8 +582,11 @@ func (s *Server) handleClipMessage(client *hub.Client, env model.Envelope, raw [
 
 	delivered := s.hub.Broadcast(out, client.DeviceID)
 
-	// 离线设备入队，等它上线后补推
-	s.enqueueForOffline(clipID, client.DeviceID)
+	// 只服务"当前这一次"操作：没打开补推窗口时，离线设备直接错过这条内容，
+	// 等它上线也不会再收到 —— 用户并不关心自己几分钟前复制过什么。
+	if s.cfg.Limits.OfflineReplaySeconds > 0 {
+		s.enqueueForOffline(clipID, client.DeviceID)
+	}
 
 	s.log.Info("内容已同步",
 		"from", client.DeviceID, "kind", p.Kind, "origin", p.Origin,
@@ -592,14 +595,21 @@ func (s *Server) handleClipMessage(client *hub.Client, env model.Envelope, raw [
 	return ackEnvelope(env.MsgID, "ok", 0, "")
 }
 
-// enqueueForOffline 为所有已配对但当前离线的设备入队
+// enqueueForOffline 为所有已配对但当前离线的设备入队。
+// 入队 TTL 直接取"补推窗口"：比窗口更早的内容，即便留在这里，
+// 也会在 DrainPending 时因 expires_at 已过而被过滤掉 —— 也就是"以往的不管"。
 func (s *Server) enqueueForOffline(clipID int64, excludeDevice string) {
 	devices, err := s.store.ListDevices()
 	if err != nil {
 		s.log.Error("查询设备列表失败", "err", err)
 		return
 	}
-	ttl := time.Duration(s.cfg.Limits.OfflineQueueTTLHours) * time.Hour
+
+	ttl := time.Duration(s.cfg.Limits.OfflineReplaySeconds) * time.Second
+	if h := time.Duration(s.cfg.Limits.OfflineQueueTTLHours) * time.Hour; h > 0 && h < ttl {
+		ttl = h
+	}
+
 	for _, d := range devices {
 		if d.DeviceID == excludeDevice || s.hub.IsOnline(d.DeviceID) {
 			continue
@@ -610,7 +620,8 @@ func (s *Server) enqueueForOffline(clipID int64, excludeDevice string) {
 	}
 }
 
-// flushPending 设备上线时补推离线期间积压的内容
+// flushPending 设备上线时补推离线期间积压的内容。
+// 补推窗口为 0（默认）时，这里只负责把残留的积压丢掉，不下发任何东西。
 func (s *Server) flushPending(client *hub.Client) {
 	clips, err := s.store.DrainPending(client.DeviceID)
 	if err != nil {
@@ -620,6 +631,14 @@ func (s *Server) flushPending(client *hub.Client) {
 	if len(clips) == 0 {
 		return
 	}
+
+	if s.cfg.Limits.OfflineReplaySeconds <= 0 {
+		// DrainPending 已经把这批记录取走了，这里直接丢弃即可
+		s.log.Info("已丢弃离线积压（未开启补推）",
+			"deviceId", client.DeviceID, "count", len(clips))
+		return
+	}
+
 	s.log.Info("补推离线内容", "deviceId", client.DeviceID, "count", len(clips))
 
 	for _, c := range clips {

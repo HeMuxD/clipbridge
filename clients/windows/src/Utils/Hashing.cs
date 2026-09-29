@@ -18,18 +18,23 @@ public static class Hashing
 /// <summary>
 /// 近期内容哈希集合。
 ///
-/// 作用有两点：
+/// 作用有三点：
 ///   1. 我们自己写入剪贴板的内容会被系统判定为"变更"，若不做处理
 ///      会导致无限回环（A→B→A→B…）。这里记下远端来源的哈希，
 ///      本地上报前先查一遍，命中就跳过。
 ///   2. 减少重复上传：同一段内容反复复制时只同步一次。
+///   3. 启动时把"剪贴板里已有的内容"登记进来，使它永远不会被当成
+///      一次新的复制操作上报 —— 用户开机后剪贴板里通常还留着
+///      上次关机前复制的东西，那些属于"以往的操作"，不该同步。
 /// </summary>
 public sealed class HashCache
 {
     private readonly int _capacity;
     private readonly LinkedList<string> _order = new();
     private readonly HashSet<string> _set = new(StringComparer.Ordinal);
-    private readonly Lock _gate = new();
+    // 注意：这里不能用 System.Threading.Lock，那是 .NET 9 才引入的类型，
+    // 本项目目标框架是 net8.0-windows，用它会直接编译不过（CS0246）。
+    private readonly object _gate = new();
 
     public HashCache(int capacity = 200)
     {
@@ -55,7 +60,13 @@ public sealed class HashCache
         }
     }
 
-    /// <summary>判断是否已存在</summary>
+    /// <summary>
+    /// 判断是否已存在。
+    ///
+    /// 这里不要改成"命中即移除"：Windows 对一次剪贴板写入常常会投递多次
+    /// WM_CLIPBOARDUPDATE，若第一次就把哈希删掉，后续那次就会被当成新内容
+    /// 重复上报（服务端虽会去重，但客户端不该产生这次多余的流量）。
+    /// </summary>
     public bool Contains(string hash)
     {
         lock (_gate)
@@ -64,17 +75,7 @@ public sealed class HashCache
         }
     }
 
-    /// <summary>消费式查询：命中则移除。用于"远端内容被本地写入后仅跳过这一次"的场景</summary>
-    public bool Consume(string hash)
-    {
-        lock (_gate)
-        {
-            if (!_set.Remove(hash)) return false;
-            _order.Remove(hash);
-            return true;
-        }
-    }
-
+    /// <summary>清空缓存（重新配对待同步内容变化后调用）</summary>
     public void Clear()
     {
         lock (_gate)

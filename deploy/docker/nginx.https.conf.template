@@ -1,0 +1,71 @@
+# ClipBridge 反代（容器内，TLS 终止）
+#
+# 这个文件是模板，由 entrypoint.sh 用 sed 渲染：双下划线包起来的占位符
+# （如 SERVER_NAME、HTTPS_PORT）会被替换成实际的环境变量值，
+# 结果写到 /etc/nginx/conf.d/ 下。
+# 故意不用花括号那种写法，这样文件里的 nginx 变量（$host、$http_upgrade…）
+# 不会被误替换。
+#
+# 上游是同一个容器里的 Go 进程，走回环，不经过 Docker 网络。
+
+upstream clipbridge_backend {
+    server 127.0.0.1:18080;
+    keepalive 32;
+}
+
+server {
+    listen __HTTPS_PORT__ ssl;
+    http2 on;
+    server_name __SERVER_NAME__;
+
+    ssl_certificate     __CERT_FILE__;
+    ssl_certificate_key __KEY_FILE__;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # 上传体积上限，需与 config.yaml 的 storage.max_file_size 保持一致
+    client_max_body_size 20m;
+
+    # ---- WebSocket 长连接 ----
+    location /ws/ {
+        proxy_pass http://clipbridge_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 长连接必须关掉缓冲，否则消息会被 Nginx 攒着不发
+        proxy_buffering off;
+        proxy_cache off;
+
+        # 客户端心跳 30 秒一次，读超时放到 1 小时，避免空闲时被掐断
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+        proxy_connect_timeout 10s;
+    }
+
+    # ---- 其余全部（/api/* 与 /f/ 图片下载） ----
+    # /f/ 由 Go 进程自己提供（internal/api/server.go 的 handleFile），
+    # 所以数据卷不需要暴露给任何外部进程。
+    location / {
+        proxy_pass http://clipbridge_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout    120s;
+    }
+
+    # 健康检查不写访问日志，避免刷屏
+    location = /healthz {
+        access_log off;
+        proxy_pass http://clipbridge_backend;
+    }
+}

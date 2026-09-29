@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -43,6 +44,13 @@ type AuthConfig struct {
 type LimitsConfig struct {
 	MaxConnPerDevice     int `yaml:"max_conn_per_device"`
 	OfflineQueueTTLHours int `yaml:"offline_queue_ttl_hours"`
+	// OfflineReplaySeconds 决定设备重新上线时，允许补推多久之内产生的内容。
+	//
+	// 默认 0 = 不补推。同步只对"当前这一次复制/截图"生效：设备离线期间攒下的
+	// 旧内容直接丢弃，设备一上线不会被打量旧内容刷屏（旧文本会挨个写进剪贴板，
+	// 用户并不关心）。
+	// 若希望容忍几秒的网络抖动（重连空档里的内容不丢），设成 60~120 比较合适。
+	OfflineReplaySeconds int `yaml:"offline_replay_seconds"`
 }
 
 type LogConfig struct {
@@ -77,6 +85,8 @@ func Default() *Config {
 		Limits: LimitsConfig{
 			MaxConnPerDevice:     3,
 			OfflineQueueTTLHours: 24,
+			// 默认不补推历史，见 OfflineReplaySeconds 的说明
+			OfflineReplaySeconds: 0,
 		},
 		Log: LogConfig{Level: "info"},
 	}
@@ -115,6 +125,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("CLIPBRIDGE_JWT_SECRET"); v != "" {
 		cfg.Auth.JWTSecret = v
+	}
+	// 容器里改这一项比改挂载的 config.yaml 更方便
+	if v := os.Getenv("CLIPBRIDGE_OFFLINE_REPLAY_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.Limits.OfflineReplaySeconds = n
+		}
 	}
 
 	// JWT 密钥留空时随机生成：安全但重启后所有 Token 失效。

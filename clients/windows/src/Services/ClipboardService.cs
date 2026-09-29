@@ -50,6 +50,11 @@ public sealed class ClipboardService : IDisposable
     {
         if (IsListening) return;
 
+        // 先登记"启动瞬间剪贴板里已有的内容"。
+        // 用户开机自启时，剪贴板里往往还留着上次关机前复制的东西 ——
+        // 那属于"以往的复制操作"，不该被同步，所以先把它标成已处理。
+        RegisterExistingClipboard();
+
         _window = new MessageWindow();
         _window.ClipboardUpdated += OnClipboardUpdated;
         _window.StartClipboardListener();
@@ -64,6 +69,28 @@ public sealed class ClipboardService : IDisposable
 
         IsListening = true;
         ListenerStateChanged?.Invoke(true);
+    }
+
+    /// <summary>
+    /// 把启动时就已经存在于剪贴板的内容登记为"历史内容"，
+    /// 这样它永远不会被当成一次新的复制操作上报。
+    /// 必须在 STA 线程上调用（Clipboard API 的要求）。
+    /// </summary>
+    private void RegisterExistingClipboard()
+    {
+        try
+        {
+            var existing = ReadClipboard();
+            if (existing is null) return;
+
+            _cache.Add(existing.Hash);
+            Log.Info($"剪贴板中已有内容（{existing.Kind}），已登记为历史内容，不会同步");
+        }
+        catch (Exception ex)
+        {
+            // 登记失败不影响后续监听，最多是启动后可能多同步一次旧内容
+            Log.Warn($"登记启动时的剪贴板内容失败：{ex.Message}");
+        }
     }
 
     public void Stop()
@@ -85,20 +112,28 @@ public sealed class ClipboardService : IDisposable
         var content = ReadClipboard();
         if (content is null) return;
 
-        // 我们自己写入的远端内容会再次触发此事件，靠哈希识别并跳过，
-        // 否则会形成 A→B→A→B 的无限回环。
-        if (_cache.Consume(content.Hash))
+        // 哈希已经在缓存里，说明这条内容不属于"当前这一次新操作"：
+        //   · 我们自己刚把远端内容写进剪贴板，系统又回调了一次 —— 跳过才能阻断 A→B→A 回环
+        //   · 启动前就存在于剪贴板的内容 —— 跳过，以往的操作不同步
+        //   · 同一段内容被反复复制 —— 只同步第一次
+        //
+        // 注意用 Contains 而不是"命中即移除"：Windows 对一次剪贴板写入常常会投递
+        // 多次 WM_CLIPBOARDUPDATE，若第一次就删掉哈希，后续那次会被当成新内容重复上报。
+        if (_cache.Contains(content.Hash))
         {
-            Log.Debug($"剪贴板变更来自远端写入，已跳过。hash={Short(content.Hash)}");
+            Log.Debug($"内容已处理过，跳过。hash={Short(content.Hash)}");
             return;
         }
 
-        // 同内容重复复制时不重复上传
-        if (_cache.Contains(content.Hash)) return;
         _cache.Add(content.Hash);
-
         ContentCaptured?.Invoke(content);
     }
+
+    /// <summary>
+    /// 读取"此刻"的剪贴板内容，供「立即同步剪贴板」这类手动触发使用。
+    /// 必须在 STA 线程上调用（WinForms 的 Clipboard API 要求）。
+    /// </summary>
+    public static ClipboardContent? ReadCurrent() => ReadClipboard();
 
     /// <summary>
     /// 读取当前剪贴板内容。优先取文本，其次取图片。

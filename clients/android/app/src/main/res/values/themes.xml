@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主界面主题：无 ActionBar，交给 Compose 渲染 -->
+    <style name="Theme.ClipBridge" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- 分享接收 Activity 用透明主题，避免闪屏 -->
+    <style name="Theme.ClipBridge.Transparent" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
+</resources>

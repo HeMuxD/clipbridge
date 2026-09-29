@@ -1,0 +1,23 @@
+# 行尾策略
+#
+# 为什么必须显式约定：entrypoint.sh 是要在容器里被 /bin/sh 执行的。
+# 一旦它被检出成 CRLF，Linux 下会报
+#   /opt/clipbridge/entrypoint.sh: not found
+# 或
+#   : not found
+# 看起来像"文件不存在"，实际是被行尾的 \r 噎住了，非常难查。
+#
+# 这几个文件在 Linux 容器里直接使用，强制 LF。
+
+*.sh                text eol=lf
+Dockerfile          text eol=lf
+*.template          text eol=lf
+.env.example        text eol=lf
+
+# Windows 上要用的脚本保留 CRLF
+*.bat               text eol=crlf
+*.cmd               text eol=crlf
+*.ps1               text eol=crlf
+
+# 其余文本文件按各平台习惯检出即可
+*                   text=auto

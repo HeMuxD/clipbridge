@@ -21,6 +21,12 @@ public sealed class ScreenshotWatcher : IDisposable
     private FileSystemWatcher? _watcher;
     private bool _disposed;
 
+    /// <summary>
+    /// 启动瞬间目录里已经存在的文件。这些是"以往的截图"，一律不同步 ——
+    /// 只同步启动之后新出现的文件。
+    /// </summary>
+    private readonly HashSet<string> _existing = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>检测到新截图时触发，参数为文件完整路径</summary>
     public event Action<string>? ScreenshotDetected;
     public event Action<string>? StatusMessage;
@@ -44,6 +50,8 @@ public sealed class ScreenshotWatcher : IDisposable
             return false;
         }
 
+        SnapshotExisting(folder);
+
         _watcher = new FileSystemWatcher(folder)
         {
             // 只关心新文件，忽略改名与删除
@@ -62,6 +70,32 @@ public sealed class ScreenshotWatcher : IDisposable
 
         Log.Info($"截图目录监控已启动：{folder}");
         return true;
+    }
+
+    /// <summary>
+    /// 记下启动瞬间目录里已有的文件。
+    /// 用户开机时截图目录里往往堆着几十张历史截图，这些都不该被同步 ——
+    /// 只有启动之后新落盘的文件才算"这一次截图"。
+    /// </summary>
+    private void SnapshotExisting(string folder)
+    {
+        _existing.Clear();
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(folder))
+            {
+                _existing.Add(Path.GetFullPath(file));
+            }
+            if (_existing.Count > 0)
+            {
+                Log.Info($"截图目录中已有 {_existing.Count} 个文件，均视为历史内容，不会同步");
+            }
+        }
+        catch (Exception ex)
+        {
+            // 枚举失败时退化为"不额外过滤"，仍由哈希去重兜底
+            Log.Warn($"枚举截图目录失败，历史文件过滤已跳过：{ex.Message}");
+        }
     }
 
     public void Stop()
@@ -97,6 +131,13 @@ public sealed class ScreenshotWatcher : IDisposable
     private void HandleFile(string path)
     {
         if (!_shouldSync()) return;
+
+        // 启动前就存在的文件不是"这一次截图"，直接忽略
+        if (_existing.Contains(Path.GetFullPath(path)))
+        {
+            Log.Debug($"忽略启动前已存在的文件：{Path.GetFileName(path)}");
+            return;
+        }
 
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (!ImageExtensions.Contains(ext)) return;
