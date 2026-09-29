@@ -19,14 +19,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,7 +42,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.clipbridge.app.data.Prefs
 import com.clipbridge.app.data.StatusHolder
@@ -137,6 +142,37 @@ fun MainScreen(resumeTick: Int, requestNotificationPermission: () -> Unit) {
         if (statusText.isNotEmpty()) {
             Spacer(Modifier.height(2.dp))
             Text(statusText, style = MaterialTheme.typography.bodySmall)
+        }
+
+        // ---------- 上行诊断 ----------
+        // 「本机复制了但对面没收到」这类问题，从服务端只看得到"零请求"，
+        // 完全无法区分是设备没感知到复制、还是感知到了但发送失败。
+        // 把最近的事件就地渲染出来，用户不用连电脑抓 logcat。
+        val diag by StatusHolder.diag.collectAsState()
+        if (diag.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("上行诊断（最近 ${diag.size} 条）", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.width(10.dp))
+                TextButton(onClick = { StatusHolder.clearDiag() }) { Text("清空") }
+            }
+            Spacer(Modifier.height(4.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(10.dp)) {
+                    diag.forEach { line ->
+                        Text(
+                            line,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(20.dp))

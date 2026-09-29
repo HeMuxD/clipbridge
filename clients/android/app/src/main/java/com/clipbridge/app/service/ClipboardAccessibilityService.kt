@@ -56,6 +56,12 @@ class ClipboardAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var pending: Runnable? = null
+
+    /**
+     * 待执行的那次检查是否允许回退到"选中内容"。
+     * 只增不减，直到该次检查真正执行 —— 原因见 scheduleCheck 的注释。
+     */
+    private var pendingAllowFallback = false
     private var attached = false
 
     /** 最近一次文本选中的内容与时间戳 */
@@ -91,6 +97,7 @@ class ClipboardAccessibilityService : AccessibilityService() {
     private fun attach() {
         if (attached) return
         attached = true
+        StatusHolder.addDiag("无障碍服务已连接")
 
         // 启动瞬间剪贴板里已有的内容属于"以往的复制操作"，先登记掉，
         // 这样它永远不会被当成一次新的复制上报。
@@ -99,7 +106,9 @@ class ClipboardAccessibilityService : AccessibilityService() {
         try {
             getSystemService(ClipboardManager::class.java)
                 ?.addPrimaryClipChangedListener(clipListener)
+            StatusHolder.addDiag("已注册剪贴板变更监听")
         } catch (e: Exception) {
+            StatusHolder.addDiag("注册剪贴板监听失败：${e.message}")
             Log.w(TAG, "注册剪贴板监听失败", e)
         }
 
@@ -119,6 +128,7 @@ class ClipboardAccessibilityService : AccessibilityService() {
         }
         pending?.let { handler.removeCallbacks(it) }
         pending = null
+        pendingAllowFallback = false
         SyncEngine.release(HOLDER)
     }
 
@@ -138,7 +148,12 @@ class ClipboardAccessibilityService : AccessibilityService() {
 
             AccessibilityEvent.TYPE_VIEW_CLICKED,
             AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
-                if (looksLikeCopyAction(e)) {
+                val hit = looksLikeCopyAction(e)
+                StatusHolder.addDiag(
+                    "${eventName(e.eventType)} ${shortPkg(e.packageName)} " +
+                        if (hit) "命中复制标签" else "未命中复制标签"
+                )
+                if (hit) {
                     // 刚点了复制：优先读剪贴板，读不到就用刚才记下的选中内容
                     scheduleCheck(allowSelectionFallback = true, immediate = true)
                 }
@@ -150,18 +165,48 @@ class ClipboardAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 记下当前选中的文本，供"点了复制但读不到剪贴板"时回退使用 */
+    private fun eventName(type: Int): String = when (type) {
+        AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> "选中变化"
+        AccessibilityEvent.TYPE_VIEW_CLICKED -> "点击"
+        AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "长按"
+        AccessibilityEvent.TYPE_VIEW_FOCUSED -> "焦点"
+        else -> "type=$type"
+    }
+
+    /** 只留包名最后一段，别把整条流水撑爆 */
+    private fun shortPkg(pkg: CharSequence?): String =
+        pkg?.toString()?.substringAfterLast('.')?.take(14) ?: "?"
+
+    /**
+     * 记下当前选中的文本，供"点了复制但读不到剪贴板"时回退使用。
+     *
+     * 这一路失败的原因往往很隐蔽（比如文本由 WebView 渲染时，节点不提供
+     * textSelectionStart/End），所以每个 return 都留一条诊断 —— 否则外在表现
+     * 只是"什么都没同步"，完全看不出断在哪一步。
+     */
     private fun rememberSelection(e: AccessibilityEvent) {
-        val node = e.source ?: return
+        val node = e.source
+        if (node == null) {
+            StatusHolder.addDiag("选中变化：拿不到节点（e.source 为空）")
+            return
+        }
         val text = node.text?.toString()
-        if (text.isNullOrEmpty()) return
+        if (text.isNullOrEmpty()) {
+            val cls = node.className?.toString()?.substringAfterLast('.') ?: "?"
+            StatusHolder.addDiag("选中变化：节点无文本（$cls）")
+            return
+        }
 
         val start = node.textSelectionStart
         val end = node.textSelectionEnd
-        if (start < 0 || end <= start || end > text.length) return
+        if (start < 0 || end <= start || end > text.length) {
+            StatusHolder.addDiag("选中变化：区间无效 start=$start end=$end（文本 ${text.length} 字）")
+            return
+        }
 
         lastSelection = text.substring(start, end)
         lastSelectionAt = System.currentTimeMillis()
+        StatusHolder.addDiag("记下选中：${lastSelection?.length} 字")
         Log.d(TAG, "记下选中内容（${lastSelection?.length} 字）")
     }
 
@@ -192,32 +237,67 @@ class ClipboardAccessibilityService : AccessibilityService() {
 
     // ---------- 上行 ----------
 
+    /**
+     * 调度一次"当前剪贴板"检查。
+     *
+     * ⚠️ 回退能力是**粘性**的：pendingAllowFallback 只增不减，直到这次检查真正执行。
+     *
+     * 原因是一次复制会同时产生两个触发：
+     *   ① 无障碍的「点击了复制」事件 —— allowSelectionFallback = true，
+     *      但受 notificationTimeout=100 节流，到得晚；
+     *   ② 剪贴板变更通知 —— allowSelectionFallback = false，是即时的，到得早。
+     * 后到的 ② 会取消 ① 已经排好的调度。如果让 ② 把回退能力覆盖回 false，
+     * 那么 Android 10+ 上**唯一**能拿到内容的那条路就被静默取消了，
+     * 表现正好是"复制了但什么都没同步"。
+     */
     private fun scheduleCheck(allowSelectionFallback: Boolean, immediate: Boolean = false) {
         pending?.let { handler.removeCallbacks(it) }
-        val r = Runnable { checkClipboard(allowSelectionFallback) }
+        pendingAllowFallback = pendingAllowFallback || allowSelectionFallback
+        val allowFallback = pendingAllowFallback
+        val r = Runnable {
+            pending = null
+            pendingAllowFallback = false
+            checkClipboard(allowFallback)
+        }
         pending = r
         handler.postDelayed(r, if (immediate) 80L else DEBOUNCE_MS)
     }
 
     private fun checkClipboard(allowSelectionFallback: Boolean) {
-        if (Prefs.getToken(this).isEmpty()) return
-        if (!ClipClient.connected) return
+        if (Prefs.getToken(this).isEmpty()) {
+            StatusHolder.addDiag("检查中止：尚未配对")
+            return
+        }
+        if (!ClipClient.connected) {
+            StatusHolder.addDiag("检查中止：未连接")
+            return
+        }
 
         // 第一路：直接读系统剪贴板
         val fromClipboard = readClipboardText()
         if (!fromClipboard.isNullOrEmpty()) {
+            StatusHolder.addDiag("读到剪贴板：${fromClipboard.length} 字")
             submitIfNew(fromClipboard)
             return
         }
 
         // 第二路：读不到剪贴板时，退回"点复制之前记下的选中内容"
-        if (allowSelectionFallback) {
-            val sel = lastSelection
-            val fresh = System.currentTimeMillis() - lastSelectionAt <= SELECTION_TTL_MS
-            if (!sel.isNullOrEmpty() && fresh) {
-                submitIfNew(sel)
-            }
+        if (!allowSelectionFallback) {
+            StatusHolder.addDiag("剪贴板读不到（系统限制），本次不允许回退")
+            return
         }
+        val sel = lastSelection
+        if (sel.isNullOrEmpty()) {
+            StatusHolder.addDiag("剪贴板读不到，且没有可用的选中内容")
+            return
+        }
+        val ageMs = System.currentTimeMillis() - lastSelectionAt
+        if (ageMs > SELECTION_TTL_MS) {
+            StatusHolder.addDiag("剪贴板读不到，选中内容已过期（${ageMs / 1000}s）")
+            return
+        }
+        StatusHolder.addDiag("回退用选中内容：${sel.length} 字")
+        submitIfNew(sel)
     }
 
     private fun readClipboardText(): String? {
@@ -236,12 +316,16 @@ class ClipboardAccessibilityService : AccessibilityService() {
         val hash = Hashing.sha256(text)
         // 命中缓存说明：这是我们自己刚写进剪贴板的远端内容（回环），
         // 或者用户重复复制了同一段内容 —— 两种都不该再上报一次。
-        if (HashCache.contains(hash)) return
+        if (HashCache.contains(hash)) {
+            StatusHolder.addDiag("跳过：与刚同步过的内容相同")
+            return
+        }
 
         HashCache.add(hash)
         lastSelection = null
 
         val ok = ClipClient.sendText(text, ClipOrigin.CLIPBOARD)
+        StatusHolder.addDiag(if (ok) "✅ 已上行：${text.length} 字" else "❌ 上行失败：未连接")
         Log.i(TAG, "上行文本：${text.length} 字，发送成功=$ok")
         StatusHolder.statusText.value =
             if (ok) "已同步本机复制的内容" else "同步失败（未连接）"
