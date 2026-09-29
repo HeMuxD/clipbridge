@@ -63,6 +63,30 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # 反代 + TLS 终止：跑在容器里，宿主机（飞牛）不用装 nginx
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: clipbridge-nginx
+    restart: unless-stopped
+    depends_on:
+      - clipbridge
+
+    ports:
+      # 只占 443（飞牛已占用 80，80 的 HTTP→HTTPS 跳转省略）
+      - "443:443"
+
+    volumes:
+      # TLS 证书（certbot 签在宿主机 /etc/letsencrypt）
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # 反代配置
+      - ./nginx.conf:/etc/nginx/conf.d/clipbridge.conf:ro
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   clipbridge-data:
     driver: local
