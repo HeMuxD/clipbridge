@@ -13,4 +13,4 @@ package buildinfo
 // Version 是服务端版本号。
 //
 // 用 var 而不是 const，因为 -ldflags -X 只能改写包级变量。
-var Version = "0.0.1"
+var Version = "0.0.2"

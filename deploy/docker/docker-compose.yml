@@ -28,10 +28,10 @@ services:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
       args:
-        VERSION: "0.0.1"
+        VERSION: "0.0.2"
         # 国内构建保留镜像源；海外机器可改为 https://proxy.golang.org,direct
         GOPROXY: "https://goproxy.cn,direct"
-    image: clipbridge:0.0.1
+    image: clipbridge:0.0.2
     container_name: clipbridge
     restart: unless-stopped
 

@@ -8,7 +8,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ClipBridge</AssemblyName>
     <RootNamespace>ClipBridge</RootNamespace>
-    <Version>0.0.1</Version>
+    <Version>0.0.2</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
     <!-- 单文件发布，避免用户装 .NET 运行时 -->

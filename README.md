@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.1** — [本版改动](#v001-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.2** — [本版改动](#v002-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,12 +169,54 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.1** | 2026-09-29 | 首个对外发布版本 |
+| **v0.0.2** | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
+| v0.0.1 | 2026-09-29 | 首个对外发布版本 |
 
-本版是**第一个可用版本**：服务端、Windows / Android 客户端与 Docker 部署已闭环，
-并在真实环境（飞牛 NAS + 家庭宽带 + 两台 Android）完整联调通过。
+### v0.0.2 改动内容
+
+这一版**只改 Android 客户端**，服务端与跨端协议没有任何变化 —— v0.0.1 的服务端可以继续用。
+
+#### 后台保护：App 被划掉后仍继续同步
+
+以前连接只由无障碍服务持有，而很多 ROM 会在 App 被划出最近任务后把整个进程一起掐掉，
+表现就是"后台待一会儿就掉线"。现在补上一层有兜底的保活结构：
+
+- 前台服务声明 `android:stopWithTask="false"` —— **划出最近任务时不被连带销毁**，
+  连接继续保持着，这是"划掉后台照样同步"的关键
+- `START_STICKY` —— 被系统回收后请求重建
+- **看门狗**（`AlarmManager`，每 5 分钟自检）：闹钟由系统持有、**不随进程消亡**，
+  是进程已被杀之后唯一还能把服务叫回来的东西
+- **开机自启** —— 不注册的话，手机重启后就一直离线
+- App 内引导加入**电池优化白名单**与**厂商自启动权限**
+  （按厂商逐个跳转小米 / 华为 / 荣耀 / OPPO / vivo 的对应设置页）
+- 连接断了会主动补连。只重新持有连接是不够的：引用计数仍大于 0 时不会触发新连接，
+  而指数退避的重连协程已随进程消失，结果就是"服务活着但一直连不上"
+
+> 有一件事任何 App 都做不到：在系统设置里"**强行停止**"之后无法自启 —— 这是 Android 的设计。
+> 另外本项目 `targetSdk` 刻意保持 **34**：Android 15 给 `dataSync` 前台服务加了
+> 6 小时 / 24 小时时长上限，且禁止由开机广播启动，升到 35 就会中招。
+
+#### 其它改进
+
+- **上行诊断面板**改为固定高度、内部滚动（原来条数一多会把整个页面撑得很长），
+  记录带时间戳，且**超过 2 小时自动淘汰**
+- **配对信息不再丢**：配对码此前从不持久化，且配对结果用 `apply()` 异步落盘
+  （进程若在落盘前被杀就会丢）。现在配对成功后写入、启动时回填，并改为同步写入
+- **图标重做**：沿用蓝色剪贴板基底，中间加入"文本行 + 图片框"二合一标记；
+  做成自适应图标（方形 / 圆形遮罩下都不会被裁）+ Android 7.x 的矢量回退版本
+- 通知栏小图标改为**纯白剪影**（原来用彩色图标，会被系统渲染成一块白方块），
+  且文案会随连接状态变化
+
+#### 行为变化（需要知道）
+
+**后台保护默认开启**，所以更新后会常驻一条静默通知 —— 这是前台服务的硬性要求，无法隐藏。
+想要零通知可以在 App 内关掉，代价是回到"可能被 ROM 掐掉"的状态。
+另外**建议装好后点两下**：App 里的「忽略电池优化 → 去加入」与「允许自启动 → 去设置」。
 
 ### v0.0.1 改动内容
+
+v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与 Docker 部署已闭环，
+并在真实环境（飞牛 NAS + 家庭宽带 + 两台 Android）完整联调通过。
 
 #### 同步行为
 
@@ -240,10 +282,10 @@ sequenceDiagram
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.1-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.1-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.1-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.1.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-server-0.0.2-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.2-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.2-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.2.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 > **Windows 客户端**本版未提供预编译产物（构建环境无 .NET SDK），
@@ -300,7 +342,7 @@ go run ./cmd/clipbridge -config config.example.yaml
 ### 客户端
 
 - **Windows**：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`，运行后填入服务端地址 + 配对码即可。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.1.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.2.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
