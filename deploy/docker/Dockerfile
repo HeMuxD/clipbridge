@@ -10,8 +10,15 @@
 # 注意：仓库里必须存在 go.sum。修改依赖后请在 server/ 下执行 `go mod tidy`
 # 并把生成的 go.sum 一并提交，否则下面的 COPY go.mod go.sum 会直接失败。
 
+# 基础镜像源：默认走 DaoCloud 公共镜像站（国内可直连），规避 Docker Hub
+# 及飞牛 NAS 默认加速器 docker.fnnas.com 拉取 401 的问题。
+# 海外环境或自有可用加速器时，可构建时覆盖回官方源：
+#   docker build --build-arg GOLANG_IMAGE=golang:1.22-alpine --build-arg ALPINE_IMAGE=alpine:3.20 ...
+ARG GOLANG_IMAGE=docker.m.daocloud.io/library/golang:1.22-alpine
+ARG ALPINE_IMAGE=docker.m.daocloud.io/library/alpine:3.20
+
 # ---------- 构建阶段 ----------
-FROM golang:1.22-alpine AS builder
+FROM ${GOLANG_IMAGE} AS builder
 
 # 国内构建环境走镜像代理，避免拉不到依赖
 ARG GOPROXY=https://goproxy.cn,direct
@@ -36,7 +43,7 @@ RUN go build \
         ./cmd/clipbridge
 
 # ---------- 运行阶段 ----------
-FROM alpine:3.20
+FROM ${ALPINE_IMAGE}
 
 # ca-certificates：出站 HTTPS 需要；tzdata：日志时间戳正确
 # wget：健康检查用
