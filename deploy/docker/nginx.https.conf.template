@@ -7,11 +7,10 @@
 # 不会被误替换。
 #
 # 上游是同一个容器里的 Go 进程，走回环，不经过 Docker 网络。
-
-upstream clipbridge_backend {
-    server 127.0.0.1:18080;
-    keepalive 32;
-}
+#
+# ⚠️ upstream clipbridge_backend 定义在 nginx.http.conf.template 里，不在这里。
+#   本文件只有证书存在时才会被渲染，把 upstream 放这儿会导致"无证书"时
+#   nginx 找不到上游而启动失败。详见那份文件里的说明。
 
 server {
     listen __HTTPS_PORT__ ssl;

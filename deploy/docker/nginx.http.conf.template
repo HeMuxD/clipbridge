@@ -5,6 +5,17 @@
 #   2. 局域网内直连调试，以及将来若改用 http-01 方式签证书时的 ACME 挑战
 #
 # 同样由 entrypoint.sh 渲染。
+#
+# ⚠️ upstream 必须定义在这一份里，不能只写在 HTTPS 模板里：
+#   entrypoint 【总是】渲染本文件，而 HTTPS 那份只有证书存在时才渲染。
+#   如果 upstream 只存在于 HTTPS 模板，"没有证书"这条路径上 nginx 会因为
+#   "host not found in upstream" 直接启动失败 —— 整个降级兜底就废了。
+#   nginx 在解析期就解析 upstream 引用，与 conf.d 的文件加载顺序无关。
+
+upstream clipbridge_backend {
+    server 127.0.0.1:18080;
+    keepalive 32;
+}
 
 server {
     listen __HTTP_PORT__;
