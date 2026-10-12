@@ -354,6 +354,13 @@ class ClipboardAccessibilityService : AccessibilityService() {
             return
         }
 
+        // 剪贴板里若是"我们刚写进去的远端图片"（URI 条目），整次检查直接跳过。
+        // 不能让它落到第一路去读 —— 原因见 isClipboardImage() 的注释。
+        if (isClipboardImage()) {
+            StatusHolder.addDiag("剪贴板是刚收到的图片，跳过上行")
+            return
+        }
+
         // 第一路：直接读系统剪贴板
         val fromClipboard = readClipboardText()
         if (!fromClipboard.isNullOrEmpty()) {
@@ -437,12 +444,37 @@ class ClipboardAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /**
+     * 剪贴板当前是不是"图片"。
+     *
+     * 必须单独判断，不能指望 coerceToText 的降级行为：它对带 URI 的条目会去请求
+     * 一个文本类型的流，而部分 ROM 的 MediaStore 会真的把 PNG 字节返回，
+     * 于是**图片被当文本读成 "�PNG…" 再上行回 PC**（真机上撞到过：
+     * PC 端截图后，手机会回传一条内容是 "�PNG" 的"文本"）。
+     * 这种内容是本端刚写入的远端图片，本来就不需要上行。
+     */
+    private fun isClipboardImage(): Boolean {
+        return try {
+            val cm = getSystemService(ClipboardManager::class.java) ?: return false
+            val clip = cm.primaryClip ?: return false
+            if (clip.itemCount == 0) return false
+
+            val mime = clip.description?.getMimeType(0)
+            clip.getItemAt(0).uri != null || (mime?.startsWith("image/") == true)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun readClipboardText(): String? {
         return try {
             val cm = getSystemService(ClipboardManager::class.java) ?: return null
             val clip = cm.primaryClip ?: return null
             if (clip.itemCount == 0) return null
-            clip.getItemAt(0).coerceToText(this)?.toString()?.takeIf { it.isNotEmpty() }
+
+            // 只认“真正的文本条目”。**不要用 coerceToText()** ——
+            // 它对 URI 条目会尝试按 text/* 打开内容，图片会被读成二进制乱码。
+            clip.getItemAt(0).text?.toString()?.takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
             // 后台读取被系统拒绝是预期行为，不当成错误
             null

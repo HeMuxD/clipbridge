@@ -25,8 +25,17 @@ internal sealed class TrayApplication : ApplicationContext
 
     private SettingsForm? _settingsForm;
 
+    /// <summary>
+    /// 专供切线程用的隐藏控件：句柄在 UI 线程上创建，
+    /// 之后 InvokeRequired / Invoke 的判断都可靠（ToolStrip 做不到这一点）。
+    /// </summary>
+    private readonly Control _uiAnchor = new();
+
     public TrayApplication(bool startMinimized)
     {
+        // 先把锚点控件的句柄建出来 —— 此刻就在 UI 线程上
+        _ = _uiAnchor.Handle;
+
         _settings = SettingsStore.Load();
         Log.Verbose = false;
 
@@ -136,6 +145,11 @@ internal sealed class TrayApplication : ApplicationContext
             _settingsForm = new SettingsForm(_settings, _orchestrator);
             _settingsForm.FormClosed += (_, _) => _settingsForm = null;
             _settingsForm.Show();
+
+            // 从托盘菜单弹出的窗口不会自动前置，显式把它拉到前面
+            _settingsForm.WindowState = FormWindowState.Normal;
+            _settingsForm.BringToFront();
+            _settingsForm.Activate();
         });
     }
 
@@ -193,17 +207,29 @@ internal sealed class TrayApplication : ApplicationContext
         catch { }
     }
 
-    /// <summary>确保在 UI 线程上执行</summary>
+    /// <summary>
+    /// 确保在 UI 线程上执行。
+    ///
+    /// 以前这里拿 `_tray.ContextMenuStrip.InvokeRequired` 当判断依据 ——
+    /// ToolStrip 是轻量控件、句柄创建时机不稳定，第一次从托盘菜单点「设置…」时
+    /// 判断会出错，Invoke 抛出的异常又被 `catch { }` 吞掉，
+    /// 表现就是"第一次点没反应，得再点一次"。
+    /// 现在改用一个句柄明确属于 UI 线程的隐藏控件当锚点，
+    /// 并且异常记进日志而不是静默吞掉。
+    /// </summary>
     private void RunOnUi(Action action)
     {
         try
         {
-            if (_tray.ContextMenuStrip?.InvokeRequired ?? false)
-                _tray.ContextMenuStrip.Invoke(action);
+            if (_uiAnchor.InvokeRequired)
+                _uiAnchor.Invoke(action);
             else
                 action();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Error("切到 UI 线程执行失败", ex);
+        }
     }
 
     protected override void Dispose(bool disposing)

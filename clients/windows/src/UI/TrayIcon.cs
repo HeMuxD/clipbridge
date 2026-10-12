@@ -6,14 +6,25 @@ namespace ClipBridge.UI;
 /// <summary>程序图标。运行时绘制，免去二进制资源文件。</summary>
 public static class TrayIcon
 {
-    private static Icon? _cached;
+    // 两种状态各留一份"模板"。它们是共享的，**绝不能被外部 Dispose**，
+    // 所以对外一律返回 Clone。
+    private static readonly Icon ConnectedTemplate = Build(true);
+    private static readonly Icon DisconnectedTemplate = Build(false);
 
-    /// <summary>生成一个剪贴板样式的图标</summary>
+    /// <summary>
+    /// 生成一个剪贴板样式的图标（返回的是副本，调用方可以放心 Dispose）。
+    ///
+    /// 以前这里是"缓存 + 直接返回缓存对象"，而 TrayApplication 换图标时会
+    /// `old?.Dispose()` —— 连接成功那一刻 old 和新建出来的就是同一个缓存对象，
+    /// 于是缓存把自己给释放了。之后 CreateIcon(true) 一直返回已释放的 Icon，
+    /// 构造 SettingsForm 时设 Icon 就抛 ObjectDisposedException，
+    /// 现象就是"托盘菜单里第一次点『设置…』没反应"。
+    /// </summary>
     public static Icon CreateIcon(bool connected = true)
-    {
-        // 连接状态直接影响图标颜色，这里缓存两种状态
-        if (connected && _cached is not null) return _cached;
+        => (Icon)(connected ? ConnectedTemplate : DisconnectedTemplate).Clone();
 
+    private static Icon Build(bool connected)
+    {
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
         {
@@ -45,8 +56,6 @@ public static class TrayIcon
         // GetHicon 返回的句柄需要手动释放，这里复制一份后立即销毁原句柄
         var cloned = (Icon)icon.Clone();
         DestroyIcon(icon.Handle);
-
-        if (connected) _cached = cloned;
         return cloned;
     }
 

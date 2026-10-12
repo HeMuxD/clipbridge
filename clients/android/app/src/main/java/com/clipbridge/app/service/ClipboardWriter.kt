@@ -55,7 +55,12 @@ object ClipboardWriter {
             val cm = ctx.getSystemService(ClipboardManager::class.java) ?: return
             val clip = cm.primaryClip ?: return
             if (clip.itemCount == 0) return
-            val text = clip.getItemAt(0).coerceToText(ctx)?.toString() ?: return
+
+            // 同样不能对 URI 条目用 coerceToText()：图片会被读成二进制乱码，
+            // 把那种哈希加进缓存毫无意义（也永远匹配不上真实内容）。
+            val item = clip.getItemAt(0)
+            if (item.uri != null) return
+            val text = item.text?.toString() ?: return
             if (text.isEmpty()) return
             HashCache.add(Hashing.sha256(text))
             Log.i("ClipboardWriter", "剪贴板中已有内容，已登记为历史内容，不会同步")
