@@ -75,11 +75,14 @@ public static class SettingsStore
 
         settings.Token = LoadToken();
 
-        if (changed && string.IsNullOrEmpty(settings.Token))
+        if (changed)
         {
-            // 只有还没配对过才写盘，避免覆盖正常配置。
             // 必须真的落盘：否则设备 ID 每次启动都会重新生成，
             // 服务端会把同一台机器当成不同设备。
+            //
+            // 不要再附加“Token 为空才写”的条件 —— token.bin 与 settings.json 是两个文件，
+            // 二者不同步时（比如 settings.json 被删、或早先写盘失败）会出现
+            // “有 token 但没有配置”的状态，那时反而更需要把配置补回来。
             Save(settings);
         }
         return settings;

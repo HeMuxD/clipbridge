@@ -62,9 +62,16 @@ public sealed class SyncOrchestrator : IDisposable
             _screenshots.Start(_settings.ScreenshotFolder);
         }
 
-        if (!string.IsNullOrEmpty(_settings.Token))
+        if (!string.IsNullOrEmpty(_settings.Token) && !string.IsNullOrEmpty(_settings.ServerUrl))
         {
             _client.Start();
+        }
+        else if (string.IsNullOrEmpty(_settings.ServerUrl))
+        {
+            // 地址为空就别启动连接：带着空地址 Start() 会一直重连并刷
+            // "Invalid URI: The hostname could not be parsed"，
+            // 只在 token.bin 还在、settings.json 丢了的时候才会走到这里。
+            StatusMessage?.Invoke("尚未配置服务端地址，请在设置中填写");
         }
         else
         {
