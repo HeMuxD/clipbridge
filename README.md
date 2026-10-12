@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.9** — [本版改动](#v009-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.10** — [本版改动](#v0010-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,7 +169,8 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.9** | 2026-10-12 | 服务端清理节奏改为每周一 03:00 一次（只保留当天 00:00 之后产生的缓存），磁盘上限检查保持每 30 分钟 |
+| **v0.0.10** | 2026-10-12 | 修掉「一张截图三端各出现两份」—— 手机端存相册时 MIME 写死导致字节被重新编码，触发了截图监听回环 |
+| v0.0.9 | 2026-10-12 | 服务端清理节奏改为每周一 03:00 一次（只保留当天 00:00 之后产生的缓存），磁盘上限检查保持每 30 分钟 |
 | v0.0.8 | 2026-10-12 | 服务端：修掉过期文件删不掉（磁盘只涨不降）、补齐 `max_disk_usage` 的按最旧清理；Windows 客户端加应用图标 |
 | v0.0.7 | 2026-10-12 | 修掉同一张截图在三端各出现两份（下行缺去重）、设置窗口「取消」点了没反应 |
 | v0.0.6 | 2026-10-12 | 修掉 4 个实测暴露的问题：Windows 下行写不进剪贴板、配置不落盘、手机回传「�PNG」、托盘设置要点两次 |
@@ -178,6 +179,38 @@ sequenceDiagram
 | v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.10 改动内容
+
+**只改 Android 客户端**。服务端与 Windows 客户端代码无变化，无需重新部署 / 重装。
+
+#### 一张截图在三端各出现两份
+
+真机现象：K40Pro 截图后，MIX4 和电脑端先正常收到，但过一会儿三端**又各多出一份**——
+内容完全一样、大小却不同。
+
+排查（服务端数据库里成对出现的记录给出了实锤）：
+
+```
+14:59:04  K40Pro  screenshot  image  200582  ← 原始截图
+14:59:27  Mix4    screenshot  image  200772  ← 回环（同一张图，字节不同）
+```
+
+根因链：
+
+1. `saveImage()` 把下载的图片存相册时，**写死了 `image/png` 的 MIME 和 `.png` 扩展名**，
+   而手机截图上传的是 **JPEG**。这个"MIME 声明与内容不符"的文件，被小米等 ROM 的
+   媒体库**重新编码**，字节从 200582 变成 200772。
+2. 字节一变，「按字节 hash 去重」那道防线就失效了。
+3. 落到相册的图又被本机截图监听当成"新截图"（`origin=screenshot`）上行了一次，
+   形成回环 —— 三端各多一份。
+
+修法（三处）：
+
+- `saveImage()` 按字节魔数判定真实格式（`sniffImage()`），用正确的扩展名 + MIME 落盘，
+  不再让 ROM 有机会重新编码
+- 截图监听的 `looksLikeScreenshot` 明确排除自己的下行接收目录 `Pictures/ClipBridge`，
+  双保险
 
 ### v0.0.9 改动内容
 
@@ -571,11 +604,11 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.9-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.9-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.9-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.9.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
-| `clipbridge-windows-0.0.9-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
+| `clipbridge-server-0.0.10-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.10-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.10-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.10.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.10-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
@@ -656,12 +689,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.9-x64.zip`，
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.10-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
   首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.9.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.10.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。

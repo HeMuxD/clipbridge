@@ -8,7 +8,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ClipBridge</AssemblyName>
     <RootNamespace>ClipBridge</RootNamespace>
-    <Version>0.0.9</Version>
+    <Version>0.0.10</Version>
 
     <!-- 应用图标：资源管理器 / 任务栏 / 快捷方式上显示的图标。
          由 clients/windows/make_app_icon.py 生成（可重复执行），

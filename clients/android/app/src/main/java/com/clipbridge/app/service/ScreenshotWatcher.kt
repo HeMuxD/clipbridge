@@ -205,6 +205,10 @@ class ScreenshotWatcher(private val ctx: Context) {
         /** 文件名或所在目录里出现截图关键字即认为是截图 */
         val looksLikeScreenshot: Boolean
             get() {
+                // 自己下行接收目录（Pictures/ClipBridge）里的图，绝不能当"新截图"再上行 ——
+                // 否则"收到图 → 存相册 → 又被截图监听发回去"会形成回环，
+                // 三端各多出一份内容相同、大小不同的图。
+                if (hint.lowercase().contains("clipbridge")) return false
                 val hay = (name + " " + hint).lowercase()
                 return KEYWORDS.any { hay.contains(it) }
             }

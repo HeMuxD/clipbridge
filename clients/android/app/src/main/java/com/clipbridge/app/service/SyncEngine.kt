@@ -301,13 +301,19 @@ object SyncEngine {
      * Android 9 及以下退回应用私有目录 + FileProvider，同样不需要权限。
      */
     private fun saveImage(ctx: Context, bytes: ByteArray): Uri? {
-        val name = "clipbridge_${System.currentTimeMillis()}.png"
+        // 按真实内容判定格式，而不是写死 png。
+        // 用 image/png 的声明去存 JPEG 字节，会触发部分 ROM（小米等）的媒体库
+        // 重新编码 / 重新归类 —— 字节一变，"按字节 hash 去重"就失效了，
+        // 而且截图监听可能把落进相册的图当成一张"新截图"再上行，形成回环
+        // （三端各出现两份内容相同、大小不同的图）。
+        val (ext, mime) = sniffImage(bytes)
+        val name = "clipbridge_${System.currentTimeMillis()}.$ext"
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             return try {
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.MIME_TYPE, mime)
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ClipBridge")
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
@@ -338,5 +344,20 @@ object SyncEngine {
             Log.w(TAG, "写入图片文件失败", e)
             null
         }
+    }
+
+    /** 从字节魔数判断图片的真实扩展名与 MIME 类型 */
+    private fun sniffImage(b: ByteArray): Pair<String, String> = when {
+        b.size >= 3 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() && b[2] == 0xFF.toByte() ->
+            "jpg" to "image/jpeg"
+        b.size >= 4 && b[0] == 0x89.toByte() && b[1] == 0x50.toByte() && b[2] == 0x4E.toByte() ->
+            "png" to "image/png"
+        b.size >= 6 && b[0] == 0x47.toByte() && b[1] == 0x49.toByte() && b[2] == 0x46.toByte() ->
+            "gif" to "image/gif"
+        b.size >= 12 && b[0] == 0x52.toByte() && b[1] == 0x49.toByte() && b[2] == 0x46.toByte() &&
+            b[3] == 0x46.toByte() && b[8] == 0x57.toByte() && b[9] == 0x45.toByte() &&
+            b[10] == 0x42.toByte() && b[11] == 0x50.toByte() ->
+            "webp" to "image/webp"
+        else -> "png" to "image/png"
     }
 }
