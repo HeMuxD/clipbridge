@@ -31,8 +31,14 @@ type StorageConfig struct {
 	FileDir            string `yaml:"file_dir"`
 	MaxFileSize        int64  `yaml:"max_file_size"`
 	RateLimitPerMinute int    `yaml:"rate_limit_per_minute"`
-	RetentionDays      int    `yaml:"retention_days"`
-	MaxDiskUsage       int64  `yaml:"max_disk_usage"`
+
+	// RetentionDays 只决定写入 clips.expires_at 的"逻辑过期时间"。
+	// 磁盘上的实际清理由 janitor 按自然周执行：**每周一 03:00** 删掉
+	// "本周一 00:00 之前"的全部内容（也就是只保留今天 00:00 之后产生的缓存），
+	// 见 cmd/clipbridge/main.go 的 janitor。0 = 逻辑上永不过期。
+	RetentionDays int `yaml:"retention_days"`
+
+	MaxDiskUsage int64 `yaml:"max_disk_usage"`
 }
 
 type AuthConfig struct {

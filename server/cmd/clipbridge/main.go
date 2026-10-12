@@ -4,7 +4,7 @@
 //  1. 加载配置、打开数据库
 //  2. 准备配对码（配置了固定码就用它，否则随机生成）并打印到日志
 //  3. 监听 HTTP/WebSocket，等待客户端接入
-//  4. 后台定期清理过期内容与磁盘占用
+//  4. 后台维护：每周一 03:00 清理历史缓存，并持续盯磁盘占用上限
 package main
 
 import (
@@ -132,40 +132,82 @@ func run(cfgPath string, rotateOnly bool, baseLog *slog.Logger) error {
 	return httpSrv.Shutdown(shutdownCtx)
 }
 
-// janitor 定期清理过期内容，并在磁盘超限时按最旧优先删除
+// 磁盘上限的检查频率。
+//
+// 它和"每周清一次历史缓存"是两件事：这个是防止写满的安全阀，不能跟着降到
+// 一周一次 —— 否则磁盘在周中涨满，要一直撑到下周一才有人管。
+const diskCheckInterval = 30 * time.Minute
+
+// janitor 负责两类后台维护：
+//
+//  1. **历史缓存：每周一 03:00 清一次**。删掉"本周一 00:00 之前"的全部内容，
+//     也就是除今天 00:00–03:00 之外的所有缓存 —— 只留下本周刚产生的那点。
+//     保留粒度本来就是"周"，没必要隔几分钟就去扫一次库。
+//  2. **磁盘上限：每 30 分钟查一次**，超限就按最旧优先删到上限以内。
 func janitor(ctx context.Context, st *store.Store, cfg *config.Config, log *slog.Logger) {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
+	cleanup := time.NewTimer(untilNextCleanup(time.Now()))
+	defer cleanup.Stop()
+
+	disk := time.NewTicker(diskCheckInterval)
+	defer disk.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			if n, err := st.CleanupExpired(); err != nil {
-				log.Error("清理过期内容失败", "err", err)
-			} else if n > 0 {
-				log.Info("已清理过期内容", "count", n)
-			}
 
-			if cfg.Storage.MaxDiskUsage > 0 {
-				usage, err := st.DiskUsage()
-				if err == nil && usage > cfg.Storage.MaxDiskUsage {
-					log.Warn("磁盘占用超过上限，开始按最旧优先清理",
-						"usageMB", usage>>20, "limitMB", cfg.Storage.MaxDiskUsage>>20)
-
-					// 先清过期内容，再按最旧优先兜底删到上限以内 ——
-					// 只跑 CleanupExpired 的话，retention_days=0 或"最近的量本身就超限"
-					// 时一条都删不掉，上限等于没设。
-					_, _ = st.CleanupExpired()
-					if n, err := st.TrimToDiskLimit(cfg.Storage.MaxDiskUsage); err != nil {
-						log.Error("按最旧优先清理失败", "err", err)
-					} else if n > 0 {
-						log.Info("已按最旧优先清理", "count", n)
-					}
-				}
+		case <-cleanup.C:
+			now := time.Now()
+			cutoff := startOfWeek(now)
+			n, err := st.CleanupBefore(cutoff.UnixMilli())
+			if err != nil {
+				log.Error("清理历史缓存失败", "err", err)
+			} else {
+				log.Info("已清理历史缓存（只保留今天 00:00 之后的）",
+					"count", n, "before", cutoff.Format("2006-01-02 15:04"))
 			}
+			cleanup.Reset(untilNextCleanup(now))
+
+		case <-disk.C:
+			enforceDiskLimit(st, cfg, log)
 		}
+	}
+}
+
+// startOfWeek 返回"本周一 00:00"（本地时区）
+func startOfWeek(now time.Time) time.Time {
+	offset := (int(now.Weekday()) + 6) % 7 // 周一 = 0 … 周日 = 6
+	d := now.AddDate(0, 0, -offset)
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+}
+
+// untilNextCleanup 返回距离下一个"周一 03:00"的时长
+func untilNextCleanup(now time.Time) time.Duration {
+	next := startOfWeek(now).Add(3 * time.Hour) // 本周一 03:00
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 7) // 本周的已经过了，等下周一
+	}
+	return next.Sub(now)
+}
+
+// enforceDiskLimit 磁盘占用超过上限时按最旧优先删到上限以内
+func enforceDiskLimit(st *store.Store, cfg *config.Config, log *slog.Logger) {
+	if cfg.Storage.MaxDiskUsage <= 0 {
+		return
+	}
+
+	usage, err := st.DiskUsage()
+	if err != nil || usage <= cfg.Storage.MaxDiskUsage {
+		return
+	}
+
+	log.Warn("磁盘占用超过上限，按最旧优先清理",
+		"usageMB", usage>>20, "limitMB", cfg.Storage.MaxDiskUsage>>20)
+
+	if n, err := st.TrimToDiskLimit(cfg.Storage.MaxDiskUsage); err != nil {
+		log.Error("按最旧优先清理失败", "err", err)
+	} else if n > 0 {
+		log.Info("已按最旧优先清理", "count", n)
 	}
 }
 

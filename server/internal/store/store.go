@@ -234,7 +234,11 @@ func (s *Store) ListClips(limit int) ([]*model.Clip, error) {
 	return out, rows.Err()
 }
 
-// CleanupExpired 清理过期内容及其关联文件与队列项
+// CleanupExpired 清理"逻辑上已过期"的内容及其关联文件与队列项。
+//
+// 注意：janitor 现在按自然周清理（每周一 03:00 走 CleanupBefore），
+// 不再调用这个方法。保留它是因为 clips.expires_at 仍在写入，
+// 且"按每条自己的 TTL 清理"在补推窗口一类的场景下可能还要用。
 func (s *Store) CleanupExpired() (int, error) {
 	now := time.Now().UnixMilli()
 
@@ -342,6 +346,44 @@ func (s *Store) TrimToDiskLimit(limit int64) (int, error) {
 	}
 
 	return removed, nil
+}
+
+// CleanupBefore 删除 created_at 早于 cutoffMs 的全部内容及其磁盘文件。
+//
+// 与 CleanupExpired 的区别：那个按每条自己的 expires_at 判断，这个按
+// "创建时间早于某个时刻"一刀切 —— 用于按自然周划界的清理。
+//
+// 调用方（janitor）传进来的是"本周一 00:00"，效果就是"清掉除今天
+// 00:00–03:00 之外的所有缓存"：清理固定在周一 03:00 触发，而那一刻
+// "今天 03:00 之后"还不存在任何内容，两个集合的差集恰好就是
+// "今天 00:00 之前"。这么写还有个好处 —— 万一触发被延迟，也不会误删
+// 刚刚产生的缓存。
+func (s *Store) CleanupBefore(cutoffMs int64) (int, error) {
+	rows, err := s.db.Query(
+		`SELECT COALESCE(file_id, '') FROM clips WHERE created_at < ?`, cutoffMs)
+	if err != nil {
+		return 0, err
+	}
+
+	var fileIDs []string
+	for rows.Next() {
+		var fid string
+		if err := rows.Scan(&fid); err == nil && fid != "" {
+			fileIDs = append(fileIDs, fid)
+		}
+	}
+	rows.Close()
+
+	res, err := s.db.Exec(`DELETE FROM clips WHERE created_at < ?`, cutoffMs)
+	if err != nil {
+		return 0, fmt.Errorf("清理历史内容失败: %w", err)
+	}
+	n, _ := res.RowsAffected()
+
+	for _, fid := range fileIDs {
+		s.removeFile(fid)
+	}
+	return int(n), nil
 }
 
 // ---------- 离线队列 ----------

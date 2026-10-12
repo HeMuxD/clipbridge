@@ -28,13 +28,13 @@ services:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
       args:
-        VERSION: "0.0.8"
+        VERSION: "0.0.9"
         # 国内构建保留镜像源；海外机器可改为 https://proxy.golang.org,direct
         GOPROXY: "https://goproxy.cn,direct"
         # Alpine 软件包源。apk 默认的 dl-cdn 在国内会卡住构建（见 Dockerfile 说明）。
         # 海外环境在 .env 里设成 https://dl-cdn.alpinelinux.org/alpine 即可。
         ALPINE_MIRROR: "${CLIPBRIDGE_ALPINE_MIRROR:-https://mirrors.aliyun.com/alpine}"
-    image: clipbridge:0.0.8
+    image: clipbridge:0.0.9
     container_name: clipbridge
     restart: unless-stopped
 

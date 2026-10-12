@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.8** — [本版改动](#v008-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.9** — [本版改动](#v009-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,7 +169,8 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.8** | 2026-10-12 | 服务端：修掉过期文件删不掉（磁盘只涨不降）、补齐 `max_disk_usage` 的按最旧清理；Windows 客户端加应用图标 |
+| **v0.0.9** | 2026-10-12 | 服务端清理节奏改为每周一 03:00 一次（只保留当天 00:00 之后产生的缓存），磁盘上限检查保持每 30 分钟 |
+| v0.0.8 | 2026-10-12 | 服务端：修掉过期文件删不掉（磁盘只涨不降）、补齐 `max_disk_usage` 的按最旧清理；Windows 客户端加应用图标 |
 | v0.0.7 | 2026-10-12 | 修掉同一张截图在三端各出现两份（下行缺去重）、设置窗口「取消」点了没反应 |
 | v0.0.6 | 2026-10-12 | 修掉 4 个实测暴露的问题：Windows 下行写不进剪贴板、配置不落盘、手机回传「�PNG」、托盘设置要点两次 |
 | v0.0.5 | 2026-10-12 | Windows 客户端首次提供预编译产物；收到的图片可另存到本地目录；修掉配对按钮点不动等 4 个界面问题 |
@@ -177,6 +178,38 @@ sequenceDiagram
 | v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.9 改动内容
+
+> ⚠️ 这一版**改了服务端的清理策略**，需要重新部署。
+
+#### 清理节奏：从「每 10 分钟」改成「每周一 03:00」
+
+原来的 `janitor` 每 10 分钟扫一次库、删掉各自已过期的内容。但保留粒度本来就是"周"，
+这么频繁地扫并没有意义 —— 真正该关心的是"上一周的缓存什么时候被清掉"。
+
+现在分成两件事：
+
+| | 原来 | 现在 |
+| --- | --- | --- |
+| **历史缓存清理** | 每 10 分钟，删"各自已过期"的 | **每周一 03:00**，删掉「本周一 00:00 之前」的全部内容 |
+| **磁盘上限检查** | 每 10 分钟 | 每 30 分钟（保持高频 —— 它是防写满的安全阀，不能跟着降到一周一次） |
+
+**「删掉本周一 00:00 之前的全部」等价于「清掉除今天 00:00–03:00 之外的所有缓存」**：
+清理固定在周一 03:00 触发，而那一刻"今天 03:00 之后"还不存在任何内容，
+两个集合的差集恰好就是"今天 00:00 之前"。这么写的额外好处是 ——
+万一触发被延迟，也不会误删刚刚产生的缓存。
+
+于是每张截图的寿命变成：
+
+```
+周一 03:30 截的  →  留到下周一 03:00  →  约 7 天
+周三 10:00 截的  →  留到下周一 03:00  →  约 4.5 天
+周日 23:00 截的  →  下周一 03:00 后就没  →  约 4 小时
+```
+
+> `retention_days` 现在只用于写入每条记录的 `expires_at`（逻辑过期时间），
+> **不再驱动磁盘清理**，配置注释里已说明。
 
 ### v0.0.8 改动内容
 
@@ -538,11 +571,11 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.8-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.8-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.8-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.8.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
-| `clipbridge-windows-0.0.8-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
+| `clipbridge-server-0.0.9-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.9-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.9-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.9.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.9-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
@@ -623,12 +656,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.8-x64.zip`，
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.9-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
   首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.8.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.9.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
