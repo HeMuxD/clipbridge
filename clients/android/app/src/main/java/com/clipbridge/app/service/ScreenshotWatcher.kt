@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import com.clipbridge.app.data.ClipOrigin
 import com.clipbridge.app.data.HashCache
 import com.clipbridge.app.data.Hashing
+import com.clipbridge.app.data.ImageFingerprint
 import com.clipbridge.app.data.StatusHolder
 
 /**
@@ -158,6 +159,18 @@ class ScreenshotWatcher(private val ctx: Context) {
                 StatusHolder.addDiag("截图跳过（与刚同步过的相同）：${info.name}")
                 return
             }
+
+            // 像素指纹去重：多台小米登录同一账号时，别的设备截的图会被小米云**压缩后**
+            // 同步到本机相册。字节 hash 挡不住（压缩后字节全变），文件名也还是
+            // Screenshot_xxx，会命中截图关键字 —— 只有对压缩鲁棒的 dHash 能识别出
+            // "这张图刚通过 ClipBridge 收到过"，从而跳过，否则形成回环、三端各多一份。
+            val fp = ImageFingerprint.dHash(bytes)
+            if (fp != null && HashCache.contains("fp:$fp")) {
+                StatusHolder.addDiag("截图跳过（与刚收到的图片相同，疑似云同步）：${info.name}")
+                Log.i(TAG, "云同步回环已阻断：${info.name} (fp=$fp)")
+                return
+            }
+
             HashCache.add(hash)
 
             StatusHolder.addDiag("发现新截图：${info.name}（${bytes.size / 1024} KB）")

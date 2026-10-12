@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.clipbridge.app.data.HashCache
 import com.clipbridge.app.data.Hashing
+import com.clipbridge.app.data.ImageFingerprint
 import com.clipbridge.app.data.Prefs
 import com.clipbridge.app.data.StatusHolder
 import kotlinx.coroutines.CoroutineScope
@@ -270,6 +271,10 @@ object SyncEngine {
                 return
             }
             HashCache.add(hash)
+
+            // 登记像素指纹：等会儿小米云同步把「别人截的这张图」压缩后推到本机相册时，
+            // 截图监听要靠它识别出来并跳过，否则会形成回环（见 ImageFingerprint 说明）。
+            ImageFingerprint.dHash(bytes)?.let { HashCache.add("fp:$it") }
 
             val uri = saveImage(ctx, bytes)
             if (uri == null) {
