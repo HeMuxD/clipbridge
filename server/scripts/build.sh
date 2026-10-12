@@ -8,14 +8,14 @@
 #   ./scripts/build.sh all          # 一次产出 linux / windows 两个目标
 #
 # 版本号：
-#   VERSION=0.0.3 ./scripts/build.sh linux
-#   默认 0.0.3，与服务端 internal/buildinfo 的默认值保持一致。
+#   VERSION=0.0.4 ./scripts/build.sh linux
+#   默认 0.0.4，与服务端 internal/buildinfo 的默认值保持一致。
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-0.0.3}"
+VERSION="${VERSION:-0.0.4}"
 OUT_DIR="dist"
 TARGET="${1:-native}"
 

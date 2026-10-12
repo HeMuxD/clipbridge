@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.3** — [本版改动](#v003-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.4** — [本版改动](#v004-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,9 +169,50 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.3** | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
+| **v0.0.4** | 2026-10-12 | Android 拆出设置页、配对后锁定参数、诊断容量可配、通知小图标改位图 |
+| v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.4 改动内容
+
+这一版**只改 Android 客户端**，跨端协议与服务端没有变化 —— v0.0.3 的服务端可以继续用。
+
+#### 主页与设置页拆开
+
+以前所有开关和输入框都堆在一页，诊断日志一长就得划半天才能找到设置项。
+现在分成两页：
+
+- **主页**只放"看"的东西：连接状态、四项开关的一句话概览、上行诊断日志
+- **设置**收拢所有"改"的入口：配对、无感同步、后台保护、截图同步、诊断记录容量、关于
+
+#### 配对成功后参数锁定
+
+服务端地址、配对码、设备名决定"连到哪、以什么身份连"。以前配对完还能随手改，
+结果是"界面看着还在用、其实已经连不上了"，而且很难自己发现。现在：
+
+- 配对成功后这三个输入框**变灰不可编辑**，顶部给出说明
+- 需要修改先点「**取消配对**」（带确认对话框）—— 它会断开连接、停掉后台保护，
+  但**保留**已填的三项内容，重新配对时不用重敲
+
+#### 诊断容量可配置
+
+主页那块「上行诊断」的条数上限与保留时长改成可调，默认 **200 条 / 2 小时**，
+可选 100/200/500/1000 条与 30 分钟 / 2 小时 / 6 小时 / 1 天，改动即时生效。
+以前这两个值是写死的，想多看一会儿历史也没办法。
+
+#### 通知小图标改为位图
+
+后台保护那条常驻通知的小图标，从 VectorDrawable 换成**多密度位图**
+（白色剪影，24/36/48/72/96 px），资源名也从 `ic_notification` 换成 `ic_stat_clipbridge`。
+
+原因是**小米 / HyperOS 对矢量通知小图标有兼容与缓存问题**：`setSmallIcon` 指定的图标
+经常不生效、一直显示成 `android:icon`（彩色的应用图标），要重启手机才可能刷新 ——
+本项目在真机上就是撞上这个。位图是各家 ROM 都走通的老路，换资源名则能绕开按名字的缓存。
+形状也重画了：**实心剪贴板 + 挖空的内容**，在 24px 下比原来的"描边 + 两条细线"清楚得多。
+
+> 顺带在设置页的「关于」里加了**版本号显示**。通知图标这类问题的第一步永远是
+> "确认你装的到底是哪一版"。
 
 ### v0.0.3 改动内容
 
@@ -322,10 +363,10 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.3-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.3-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.3-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.3.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-server-0.0.4-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.4-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.4-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.4.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 > **Windows 客户端**本版未提供预编译产物（构建环境无 .NET SDK），
@@ -410,7 +451,7 @@ go run ./cmd/clipbridge -config config.example.yaml
 ### 客户端
 
 - **Windows**：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`，运行后填入服务端地址 + 配对码即可。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.3.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.4.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。

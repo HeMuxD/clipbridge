@@ -175,8 +175,11 @@ class SyncService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_SYNC)
-            // 通知栏小图标必须是纯白剪影，用彩色图标会被系统渲染成一块白方块
-            .setSmallIcon(R.drawable.ic_notification)
+            // 通知栏小图标必须是纯白剪影（系统只取 alpha 通道），用彩色图标会被渲染成白方块。
+            // 这里用位图而不是 VectorDrawable：小米/HyperOS 对矢量小图标有兼容与缓存问题，
+            // 会出现"一直显示成彩色应用图标、重启手机才刷新"的现象（本项目实测踩过）。
+            // 资源名也刻意从 ic_notification 换成了 ic_stat_clipbridge，以绕开按名字的缓存。
+            .setSmallIcon(R.drawable.ic_stat_clipbridge)
             .setContentTitle(getString(R.string.notif_sync_title))
             .setContentText(
                 getString(

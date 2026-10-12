@@ -96,6 +96,26 @@ object SyncEngine {
     }
 
     /**
+     * 无条件彻底断开（取消配对时用）。
+     *
+     * 为什么不复用 [release]：引用计数回答的是"还有没有人需要连接"，
+     * 而取消配对是"连接本身不再成立"—— 此时无障碍服务仍然开着、仍然持有引用，
+     * 它会觉得自己该继续连着，逐个 release 根本断不掉。
+     * 所以这里直接把计数清零并把持有者集合清空，语义是"从现在起谁都不再持有"。
+     *
+     * 之后若用户重新配对，[acquire] 会从 0 涨到 1 并正常建连。
+     */
+    fun disconnectAll() {
+        synchronized(lock) {
+            holders.clear()
+            refCount.set(0)
+        }
+        Log.i(TAG, "取消配对：强制断开全部连接")
+        teardown()
+        StatusHolder.statusText.value = "尚未配对"
+    }
+
+    /**
      * 看门狗用：持有者还在，但连接确实断了，就主动补一次。
      *
      * 为什么需要它：正常断线由 [scheduleReconnect] 的指数退避负责，但那个协程

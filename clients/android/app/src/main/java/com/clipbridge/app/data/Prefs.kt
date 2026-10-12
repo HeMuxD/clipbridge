@@ -16,6 +16,18 @@ object Prefs {
     private const val KEY_PAIR_CODE = "pair_code"
     private const val KEY_BG_PROTECT = "background_protect"
     private const val KEY_SCREENSHOT = "screenshot_sync"
+    private const val KEY_DIAG_MAX = "diag_max"
+    private const val KEY_DIAG_TTL_MIN = "diag_ttl_minutes"
+
+    /** 诊断记录默认条数上限 */
+    const val DEFAULT_DIAG_MAX = 200
+
+    /** 诊断记录默认保留时长（分钟） */
+    const val DEFAULT_DIAG_TTL_MIN = 120
+
+    /** 界面上可选的条数 / 时长预设 */
+    val DIAG_MAX_CHOICES = listOf(100, 200, 500, 1000)
+    val DIAG_TTL_CHOICES_MIN = listOf(30, 120, 360, 1440)
 
     private fun sp(ctx: Context): SharedPreferences =
         ctx.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -33,6 +45,18 @@ object Prefs {
     fun getPairCode(ctx: Context): String = sp(ctx).getString(KEY_PAIR_CODE, "") ?: ""
 
     fun hasToken(ctx: Context): Boolean = getToken(ctx).isNotEmpty()
+
+    /**
+     * 取消配对：只清掉 Token。
+     *
+     * 地址、配对码、设备名**故意保留** —— 大多数取消配对是为了改其中某一项再重配，
+     * 保留下来等于预填好表单，不用重新敲一遍。
+     * 清掉 Token 之后连接自然不成立（`SyncEngine.doConnect` 会因为 token 为空直接跳过），
+     * 后台保护也会因为 `KeepAlive.superviseEnabled` 返回 false 而不再拉起服务。
+     */
+    fun clearPairing(ctx: Context) {
+        sp(ctx).edit().remove(KEY_TOKEN).commit()
+    }
 
     /**
      * 是否启用「后台保护」（前台服务 + 常驻通知）。
@@ -58,6 +82,44 @@ object Prefs {
 
     fun setScreenshotSync(ctx: Context, enabled: Boolean) {
         sp(ctx).edit().putBoolean(KEY_SCREENSHOT, enabled).apply()
+    }
+
+    // ---------- 诊断记录：条数与保留时长可配 ----------
+
+    /**
+     * 诊断流水最多保留多少条。
+     *
+     * 做成可配是因为"要留多少"取决于用户想拿它做什么：
+     * 只是想知道刚才为什么没同步，200 条足够；
+     * 想回顾一整天的同步情况，就得往上加。
+     */
+    fun diagMax(ctx: Context): Int =
+        sp(ctx).getInt(KEY_DIAG_MAX, DEFAULT_DIAG_MAX).coerceIn(20, 10_000)
+
+    fun setDiagMax(ctx: Context, value: Int) {
+        sp(ctx).edit().putInt(KEY_DIAG_MAX, value.coerceIn(20, 10_000)).apply()
+    }
+
+    /** 诊断流水的保留时长（分钟）。超过这个时间的记录会被自动淘汰。 */
+    fun diagTtlMinutes(ctx: Context): Int =
+        sp(ctx).getInt(KEY_DIAG_TTL_MIN, DEFAULT_DIAG_TTL_MIN).coerceIn(1, 7 * 24 * 60)
+
+    fun setDiagTtlMinutes(ctx: Context, value: Int) {
+        sp(ctx).edit()
+            .putInt(KEY_DIAG_TTL_MIN, value.coerceIn(1, 7 * 24 * 60))
+            .apply()
+    }
+
+    fun diagTtlMs(ctx: Context): Long = diagTtlMinutes(ctx) * 60_000L
+
+    /** 把时长格式化成给人看的样子：30 分钟 / 2 小时 / 1 天 */
+    fun formatTtl(minutes: Int): String = when {
+        minutes < 60 -> "$minutes 分钟"
+        minutes == 60 -> "1 小时"
+        minutes < 1440 && minutes % 60 == 0 -> "${minutes / 60} 小时"
+        minutes == 1440 -> "1 天"
+        minutes % 1440 == 0 -> "${minutes / 1440} 天"
+        else -> "${minutes / 60} 小时"
     }
 
     /**

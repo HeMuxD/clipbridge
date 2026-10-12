@@ -38,25 +38,44 @@ object StatusHolder {
     val diag = MutableStateFlow<List<DiagEntry>>(emptyList())
 
     /**
-     * 保留时长：2 小时。
+     * 保留条数与时长都是**可配置**的，默认 200 条 / 2 小时。
      *
-     * 诊断记录是排障用的，超过这个时间的条目对"刚才为什么没同步"已经毫无参考价值，
-     * 留着只会把界面撑长、让内存无界增长。
+     * 为什么不写死：诊断记录是排障用的，"该留多少"取决于用户想拿它做什么 ——
+     * 只想知道刚才为什么没同步，200 条足够；想回顾一整天的同步情况就得往上加。
+     * 上限留死一个 10000 条的天花板，避免配置成极端值时把内存吃满。
+     *
+     * `@Volatile`：这两个值由 UI 线程写、由无障碍服务的线程读。
      */
-    const val DIAG_TTL_MS = 2 * 60 * 60 * 1000L
+    @Volatile
+    private var maxEntries: Int = Prefs.DEFAULT_DIAG_MAX
 
-    /** 条数上限。即使 2 小时内事件极密集，也不会把内存吃满。 */
-    private const val DIAG_MAX = 500
+    @Volatile
+    private var ttlMs: Long = Prefs.DEFAULT_DIAG_TTL_MIN * 60_000L
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    /**
+     * 由 UI 层在启动时与设置变更时调用。
+     *
+     * 用"推"而不是"每次 addDiag 时读 SharedPreferences"：
+     * addDiag 可能被无障碍事件高频触发，读磁盘不合适。
+     */
+    fun applyConfig(maxEntries: Int, ttlMs: Long) {
+        this.maxEntries = maxEntries.coerceIn(20, 10_000)
+        this.ttlMs = ttlMs.coerceIn(60_000L, 7 * 24 * 60 * 60_000L)
+        pruneDiag()
+    }
+
+    /** 当前生效的保留时长（毫秒），供界面显示 */
+    fun currentTtlMs(): Long = ttlMs
 
     @Synchronized
     fun addDiag(line: String) {
         val now = System.currentTimeMillis()
         val stamp = timeFmt.format(Date(now))
         diag.value = (diag.value + DiagEntry(now, stamp, line))
-            .filter { now - it.at <= DIAG_TTL_MS }
-            .takeLast(DIAG_MAX)
+            .filter { now - it.at <= ttlMs }
+            .takeLast(maxEntries)
     }
 
     /**
@@ -68,7 +87,7 @@ object StatusHolder {
     @Synchronized
     fun pruneDiag() {
         val now = System.currentTimeMillis()
-        val kept = diag.value.filter { now - it.at <= DIAG_TTL_MS }
+        val kept = diag.value.filter { now - it.at <= ttlMs }.takeLast(maxEntries)
         if (kept.size != diag.value.size) diag.value = kept
     }
 
