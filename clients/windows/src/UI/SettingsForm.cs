@@ -19,6 +19,10 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _syncText = new();
     private readonly CheckBox _syncImage = new();
     private readonly CheckBox _watchFolder = new();
+    private readonly CheckBox _saveImages = new();
+    private readonly TextBox _imageFolder = new();
+    private readonly Button _browseFolder = new();
+    private readonly Button _openFolder = new();
     private readonly CheckBox _autoStart = new();
     private readonly CheckBox _filterSensitive = new();
     private readonly TextBox _excluded = new();
@@ -53,7 +57,7 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(520, 560);
+        ClientSize = new Size(520, 656);
         Font = new Font("Microsoft YaHei UI", 9F);
         Icon = TrayIcon.CreateIcon();
 
@@ -99,6 +103,32 @@ public sealed class SettingsForm : Form
         _syncImage.Size = new Size(400, 22);
         Controls.Add(_syncImage);
         y += 26;
+
+        // 与 Android 端"收到图片存一份到相册"对应
+        _saveImages.Text = "收到的图片另存一份到本地（手机端对应相册 Pictures/ClipBridge）";
+        _saveImages.Location = new Point(16, y);
+        _saveImages.Size = new Size(470, 22);
+        _saveImages.CheckedChanged += (_, _) => UpdateImageFolderEnabled();
+        Controls.Add(_saveImages);
+        y += 26;
+
+        _imageFolder.Location = new Point(38, y);
+        _imageFolder.Size = new Size(326, 24);
+        _imageFolder.PlaceholderText = "留空则用 图片\\ClipBridge";
+        Controls.Add(_imageFolder);
+
+        _browseFolder.Text = "浏览…";
+        _browseFolder.Location = new Point(372, y - 2);
+        _browseFolder.Size = new Size(62, 26);
+        _browseFolder.Click += OnBrowseImageFolder;
+        Controls.Add(_browseFolder);
+
+        _openFolder.Text = "打开";
+        _openFolder.Location = new Point(438, y - 2);
+        _openFolder.Size = new Size(62, 26);
+        _openFolder.Click += OnOpenImageFolder;
+        Controls.Add(_openFolder);
+        y += 34;
 
         _watchFolder.Text = "监控系统截图目录（覆盖 Win+PrtScn）";
         _watchFolder.Location = new Point(16, y);
@@ -228,7 +258,10 @@ public sealed class SettingsForm : Form
         _autoStart.Checked = AutoStart.IsEnabled();
         _filterSensitive.Checked = _settings.FilterSensitive;
         _excluded.Text = string.Join(", ", _settings.ExcludedProcesses);
+        _saveImages.Checked = _settings.SaveReceivedImages;
+        _imageFolder.Text = SettingsStore.ResolveImageFolder(_settings);
 
+        UpdateImageFolderEnabled();
         UpdatePairButtonState();
         _connStatus.Text = _orchestrator.IsConnected
             ? "已连接"
@@ -243,6 +276,50 @@ public sealed class SettingsForm : Form
     private void UpdatePairButtonState()
     {
         _pairButton.Enabled = !_pairing && !string.IsNullOrWhiteSpace(_serverUrl.Text);
+    }
+
+    /// <summary>关掉"另存一份"后，目录框与两个按钮都失去意义</summary>
+    private void UpdateImageFolderEnabled()
+    {
+        var on = _saveImages.Checked;
+        _imageFolder.Enabled = on;
+        _browseFolder.Enabled = on;
+        _openFolder.Enabled = on;
+    }
+
+    private void OnBrowseImageFolder(object? sender, EventArgs e)
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = "选择接收图片的保存目录",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+            SelectedPath = Directory.Exists(_imageFolder.Text) ? _imageFolder.Text : "",
+        };
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
+            _imageFolder.Text = dlg.SelectedPath;
+        }
+    }
+
+    private void OnOpenImageFolder(object? sender, EventArgs e)
+    {
+        try
+        {
+            var dir = string.IsNullOrWhiteSpace(_imageFolder.Text)
+                ? SettingsStore.DefaultImageFolder()
+                : _imageFolder.Text.Trim();
+
+            // 还没收到过图片时目录可能不存在，先建出来再打开，
+            // 否则资源管理器会弹一个"找不到路径"
+            Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start("explorer.exe", dir);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"打开目录失败：{ex.Message}", "提示",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void OnPairClick(object? sender, EventArgs e)
@@ -349,6 +426,10 @@ public sealed class SettingsForm : Form
         _settings.SyncImage = _syncImage.Checked;
         _settings.WatchScreenshotFolder = _watchFolder.Checked;
         _settings.FilterSensitive = _filterSensitive.Checked;
+        _settings.SaveReceivedImages = _saveImages.Checked;
+        _settings.ImageSaveFolder = string.IsNullOrWhiteSpace(_imageFolder.Text)
+            ? SettingsStore.DefaultImageFolder()
+            : _imageFolder.Text.Trim();
 
         _settings.ExcludedProcesses = _excluded.Text
             .Split(new[] { ',', '，', ';', '；' }, StringSplitOptions.RemoveEmptyEntries)

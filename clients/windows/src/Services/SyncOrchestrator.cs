@@ -216,6 +216,8 @@ public sealed class SyncOrchestrator : IDisposable
             // 监听器必须在那一刻能查到该哈希并跳过，否则形成回环。
             _cache.Add(payload.Hash);
 
+            var src = string.IsNullOrEmpty(payload.SrcName) ? "其他设备" : payload.SrcName;
+
             if (payload.Kind == ClipKind.Text)
             {
                 if (!_settings.SyncText) return;
@@ -224,8 +226,8 @@ public sealed class SyncOrchestrator : IDisposable
                 var ok = ClipboardService.WriteText(payload.Text);
                 if (ok)
                 {
-                    Log.Info($"已写入远端文本（来自 {payload.SrcName}）");
-                    RemoteContentReceived?.Invoke($"收到来自「{payload.SrcName}」的文本");
+                    Log.Info($"已写入远端文本（来自 {src}）");
+                    RemoteContentReceived?.Invoke($"收到来自「{src}」的文本");
                 }
                 else
                 {
@@ -244,15 +246,25 @@ public sealed class SyncOrchestrator : IDisposable
                     return;
                 }
 
+                // 先写剪贴板（用户最直接的感知方式），再往磁盘留一份。
                 var ok = ClipboardService.WriteImage(bytes);
-                if (ok)
+
+                string? savedPath = null;
+                if (_settings.SaveReceivedImages)
                 {
-                    Log.Info($"已写入远端图片（来自 {payload.SrcName}）");
-                    RemoteContentReceived?.Invoke($"收到来自「{payload.SrcName}」的截图");
+                    savedPath = ImageSaver.Save(bytes, SettingsStore.ResolveImageFolder(_settings));
                 }
-                else
+
+                if (ok) Log.Info($"已写入远端图片（来自 {src}）");
+                else Log.Warn("写入剪贴板失败（图片）");
+
+                if (savedPath is not null) Log.Info($"图片已留档：{savedPath}");
+                else if (_settings.SaveReceivedImages) Log.Warn("图片留档失败");
+
+                // 只要有一边成功就算收到了（另一边失败不影响用户拿到图）
+                if (ok || savedPath is not null)
                 {
-                    Log.Warn("写入剪贴板失败（图片）");
+                    RemoteContentReceived?.Invoke(DescribeImageReceived(src, ok, savedPath));
                 }
             }
         }
@@ -260,6 +272,19 @@ public sealed class SyncOrchestrator : IDisposable
         {
             Log.Error("处理远端内容失败", ex);
         }
+    }
+
+    /// <summary>把"收到了截图"这件事连同两个落点（剪贴板 / 本地留档）的结果说清楚</summary>
+    private static string DescribeImageReceived(string srcName, bool inClipboard, string? savedPath)
+    {
+        var tail = (inClipboard, savedPath) switch
+        {
+            (true, not null) => "（已进剪贴板，并存了一份到本地）",
+            (false, not null) => "（已存到本地，剪贴板被其他程序占用）",
+            (true, null) => "（已进剪贴板）",
+            _ => "",
+        };
+        return $"收到来自「{srcName}」的截图{tail}";
     }
 
     // ---------- 工具 ----------

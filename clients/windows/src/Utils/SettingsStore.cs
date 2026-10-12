@@ -67,6 +67,11 @@ public static class SettingsStore
             settings.ScreenshotFolder = DefaultScreenshotFolder();
             changed = true;
         }
+        if (string.IsNullOrWhiteSpace(settings.ImageSaveFolder))
+        {
+            settings.ImageSaveFolder = DefaultImageFolder();
+            changed = true;
+        }
 
         settings.Token = LoadToken();
 
@@ -105,6 +110,8 @@ public static class SettingsStore
         SyncImage = s.SyncImage,
         WatchScreenshotFolder = s.WatchScreenshotFolder,
         ScreenshotFolder = s.ScreenshotFolder,
+        SaveReceivedImages = s.SaveReceivedImages,
+        ImageSaveFolder = s.ImageSaveFolder,
         AutoStart = s.AutoStart,
         MaxContentBytes = s.MaxContentBytes,
         ExcludedProcesses = s.ExcludedProcesses,
@@ -158,6 +165,17 @@ public static class SettingsStore
         var screenshots = Path.Combine(pictures, "Screenshots");
         return Directory.Exists(screenshots) ? screenshots : pictures;
     }
+
+    /// <summary>
+    /// 接收图片的默认保存目录：`图片\ClipBridge`。
+    /// 与 Android 端的 `Pictures/ClipBridge` 一一对应，两端策略保持一致。
+    /// </summary>
+    public static string DefaultImageFolder()
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "ClipBridge");
+
+    /// <summary>取实际生效的接收图片目录：配置为空时回落默认值</summary>
+    public static string ResolveImageFolder(AppSettings s)
+        => string.IsNullOrWhiteSpace(s.ImageSaveFolder) ? DefaultImageFolder() : s.ImageSaveFolder;
 
     /// <summary>清空所有本地数据（用于"退出登录"）</summary>
     public static void Reset()

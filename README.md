@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.4** — [本版改动](#v004-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.5** — [本版改动](#v005-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,10 +169,45 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.4** | 2026-10-12 | Android 拆出设置页、配对后锁定参数、诊断容量可配、通知小图标改位图 |
+| **v0.0.5** | 2026-10-12 | Windows 客户端首次提供预编译产物；收到的图片可另存到本地目录；修掉配对按钮点不动等 4 个界面问题 |
+| v0.0.4 | 2026-10-12 | Android 拆出设置页、配对后锁定参数、诊断容量可配、通知小图标改位图 |
 | v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.5 改动内容
+
+以 **Windows 客户端**为主，跨端协议零变化；服务端只动了版本号一行
+（`git diff v0.0.4 v0.0.5 -- server/ shared/` 只命中 `buildinfo.go`），
+**已经在跑 v0.0.4 服务端的不需要重新部署。**
+
+#### 收到图片会另存一份到本地
+
+以前 Windows 端收到图片**只写剪贴板、不落盘** —— 下一次复制就把它顶掉了，
+想回头找都没有。手机端一直有"存一份到相册 `Pictures/ClipBridge`"的兜底，
+PC 端缺了这块，是不对称的。
+
+现在对齐了：收到的图片写进剪贴板之后，**再存一份到 `图片\ClipBridge`**（默认目录），
+位置可以在设置页改。
+
+- 新增开关「收到的图片另存一份到本地」（默认开），关掉就退回只管剪贴板
+- 目录框支持手填 + 「浏览…」选择 + 「打开」直接跳到该目录
+- 文件名形如 `clipbridge_20261012_133045.png`，用**可读时间戳**而不是毫秒数 ——
+  用户会直接在资源管理器里翻这个目录；同一秒内多张会递增后缀
+- 留档失败不影响收图：剪贴板照写，只在日志里记一笔
+- 托盘提示会把两个落点都说清楚，比如"收到来自「Pixel」的截图（已进剪贴板，并存了一份到本地）"
+
+#### 修掉四个界面问题
+
+| 问题 | 原因 |
+| --- | --- |
+| **首次运行时配对按钮一直是灰的、点不动** | `Enabled` 只在打开窗口时按**已保存的**地址算一次，之后往文本框里打字没有任何事件去重算 |
+| 配对码提示写「6 位数字」，实际是 8 位 | 文案没跟上服务端的 `DefaultPairCodeLength = 8` |
+| 配对失败后停在「正在配对…」，看不到失败原因 | `PairAsync` 的失败原因走 `Client.StatusMessage`，而设置页只订阅了 `Orchestrator` 的同名事件 |
+| 设置窗口抛 `CultureNotFoundException` | csproj 里的 `InvariantGlobalization=true` —— WinForms 处理输入法 / 文本框时会按 LCID 取 `CultureInfo`，invariant 模式下直接抛 |
+
+> 「配对按钮点不动」这条只在**首次运行、配置里还没有地址**时出现，
+> 静态校验和常规冒烟都覆盖不到这个组合 —— 是拿到 exe 真去点才暴露的。
 
 ### v0.0.4 改动内容
 
@@ -383,11 +418,11 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.4-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.4-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.4-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.4.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
-| `clipbridge-windows-0.0.4-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
+| `clipbridge-server-0.0.5-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.5-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.5-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.5.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.5-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
@@ -468,12 +503,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.4-x64.zip`，
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.5-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
   首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.4.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.5.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
@@ -489,6 +524,7 @@ go run ./cmd/clipbridge -config config.example.yaml
 | 监听剪贴板文本 | ✅ 系统原生通知，无感 | ⚠️ 后台受限，靠无障碍事件还原 |
 | 捕获截图 | ✅ 剪贴板位图 + 目录监控 | ✅ 监听相册新增图片（需相册读取权限，默认关闭） |
 | 写入剪贴板 | ✅ 直接写入 | ✅ 静默写入（写入不受后台限制） |
+| 接收图片留档 | ✅ 另存到 `图片\ClipBridge`（可关） | ✅ 另存到相册 `Pictures/ClipBridge` |
 | 常驻通知 | ✅ 无（托盘图标） | ⚠️ 后台保护需要一条静默通知（可在 App 内关闭）；下行内容本身不弹任何提示 |
 | 可靠性兜底 | — | ✅ 系统分享菜单（零权限） |
 

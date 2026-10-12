@@ -135,6 +135,16 @@ public sealed class AppSettings
     /// <summary>截图目录路径，留空则用系统默认</summary>
     public string ScreenshotFolder { get; set; } = "";
 
+    /// <summary>
+    /// 收到远端图片时，除写进剪贴板外是否再留一份到本地目录。
+    /// 与 Android 端"存一份到相册 Pictures/ClipBridge"的策略保持一致 ——
+    /// 图片只活在剪贴板里的话，下一次复制就把它顶掉了。
+    /// </summary>
+    public bool SaveReceivedImages { get; set; } = true;
+
+    /// <summary>接收图片的保存目录，留空则用默认的 图片\ClipBridge</summary>
+    public string ImageSaveFolder { get; set; } = "";
+
     /// <summary>是否开机自启</summary>
     public bool AutoStart { get; set; }
 
