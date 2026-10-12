@@ -20,7 +20,11 @@
     <!-- 裁剪会误删 WinForms 与反射用到的类型，这里关闭 -->
     <PublishTrimmed>false</PublishTrimmed>
 
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 不能用 InvariantGlobalization：WinForms 在文本框获得焦点 / 处理输入法时
+         会按 LCID 去取 CultureInfo，invariant 模式下直接抛 CultureNotFoundException
+         （实测：1033 (0x0409) is an invalid culture identifier），表现为 UI 线程异常。
+         Windows 10 1903+ 自带 icu.dll，关掉它不会让自包含产物缺文件。 -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 

@@ -26,6 +26,9 @@ public sealed class SettingsForm : Form
     private readonly Label _connStatus = new();
     private readonly Button _pairButton = new();
 
+    /// <summary>是否正在跑一次配对请求（期间配对按钮要禁用）</summary>
+    private bool _pairing;
+
     public SettingsForm(AppSettings settings, SyncOrchestrator orchestrator)
     {
         _settings = settings;
@@ -63,13 +66,17 @@ public sealed class SettingsForm : Form
 
         // ---- 配对 ----
         AddSection("配对", ref y);
-        AddLabeledInput("配对码", _pairCode, ref y, "在服务端日志中查看，6 位数字");
+        AddLabeledInput("配对码", _pairCode, ref y, "在服务端日志中查看，8 位数字");
 
         _pairButton.Text = "配对 / 重新配对";
         _pairButton.Location = new Point(16, y);
         _pairButton.Size = new Size(150, 30);
         _pairButton.Click += OnPairClick;
         Controls.Add(_pairButton);
+
+        // 地址一填上就立刻可点。如果只在 LoadValues 里算一次，
+        // 首次运行（配置里还没有地址）按钮会一直是灰的，用户根本点不动。
+        _serverUrl.TextChanged += (_, _) => UpdatePairButtonState();
 
         _connStatus.Location = new Point(178, y + 6);
         _connStatus.Size = new Size(320, 20);
@@ -222,11 +229,20 @@ public sealed class SettingsForm : Form
         _filterSensitive.Checked = _settings.FilterSensitive;
         _excluded.Text = string.Join(", ", _settings.ExcludedProcesses);
 
-        _pairButton.Enabled = !string.IsNullOrWhiteSpace(_settings.ServerUrl);
+        UpdatePairButtonState();
         _connStatus.Text = _orchestrator.IsConnected
             ? "已连接"
             : (string.IsNullOrEmpty(_settings.Token) ? "未配对" : "未连接");
         _connStatus.ForeColor = _orchestrator.IsConnected ? Color.SeaGreen : Color.Gray;
+    }
+
+    /// <summary>
+    /// 配对按钮何时可点：地址填了、且当前没有正在跑的配对请求。
+    /// 由地址输入框的 TextChanged 实时驱动。
+    /// </summary>
+    private void UpdatePairButtonState()
+    {
+        _pairButton.Enabled = !_pairing && !string.IsNullOrWhiteSpace(_serverUrl.Text);
     }
 
     private void OnPairClick(object? sender, EventArgs e)
@@ -250,28 +266,57 @@ public sealed class SettingsForm : Form
         _settings.DeviceName = _deviceName.Text.Trim();
         SettingsStore.Save(_settings);
 
-        _pairButton.Enabled = false;
+        _pairing = true;
+        UpdatePairButtonState();
         _status.Text = "正在配对…";
 
         // 配对必须在后台线程做，避免卡住 UI
         _ = Task.Run(async () =>
         {
             var client = new SyncClient(_settings);
-            var ok = await client.PairAsync(_pairCode.Text);
-            client.Dispose();
+            // 失败原因（配对码无效 / 连不上服务端）是通过这个事件报出来的。
+            // 不接的话界面会一直停在"正在配对…"，用户看不到为什么失败。
+            client.StatusMessage += OnStatus;
+
+            var ok = false;
+            try
+            {
+                ok = await client.PairAsync(_pairCode.Text);
+            }
+            finally
+            {
+                client.StatusMessage -= OnStatus;
+                client.Dispose();
+            }
 
             if (ok) SettingsStore.Save(_settings);
 
-            BeginInvoke(() =>
+            try
             {
-                _pairButton.Enabled = true;
-                _pairCode.Text = "";
-                if (ok)
+                BeginInvoke(() =>
                 {
-                    _status.Text = "配对成功，正在建立连接…";
-                    _orchestrator.Reload();
-                }
-            });
+                    if (IsDisposed) return;
+
+                    _pairing = false;
+                    UpdatePairButtonState();
+
+                    if (ok)
+                    {
+                        _pairCode.Text = "";
+                        _status.Text = "配对成功，正在建立连接…";
+                        _orchestrator.Reload();
+                    }
+                    else if (_status.Text == "正在配对…")
+                    {
+                        // 已经收到过具体原因就别覆盖它
+                        _status.Text = "配对失败，详细原因见日志";
+                    }
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                // 配对期间用户把窗口关了，忽略即可
+            }
         });
     }
 
