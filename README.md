@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.6** — [本版改动](#v006-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.7** — [本版改动](#v007-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,12 +169,40 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.6** | 2026-10-12 | 修掉 4 个实测暴露的问题：Windows 下行写不进剪贴板、配置不落盘、手机回传「�PNG」、托盘设置要点两次 |
+| **v0.0.7** | 2026-10-12 | 修掉同一张截图在三端各出现两份（下行缺去重）、设置窗口「取消」点了没反应 |
+| v0.0.6 | 2026-10-12 | 修掉 4 个实测暴露的问题：Windows 下行写不进剪贴板、配置不落盘、手机回传「�PNG」、托盘设置要点两次 |
 | v0.0.5 | 2026-10-12 | Windows 客户端首次提供预编译产物；收到的图片可另存到本地目录；修掉配对按钮点不动等 4 个界面问题 |
 | v0.0.4 | 2026-10-12 | Android 拆出设置页、配对后锁定参数、诊断容量可配、通知小图标改位图 |
 | v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.7 改动内容
+
+修掉两处问题。跨端协议零变化；服务端只有版本号一行改动
+（`git diff v0.0.6 v0.0.7 -- server/ shared/` 只命中 `buildinfo.go`），
+**已经在跑 v0.0.6 服务端的不需要重新部署。**
+
+#### 1. 同一张截图在三端各出现两份
+
+之前只在**上行**做了防回环，**下行完全没有去重** —— 上游只要把同一条投递两次，
+三端就会各留下重复的一份：
+
+- Android：`downloadAndDeliver` 下载后先查 `HashCache`，命中就跳过，不再存相册
+- Windows：`OnRemoteClipReceived` 入口处加同样的判断
+
+同时收紧了"上游为什么会重复"—— Android 的截图监听现在对**同一个 MediaStore 条目**
+只处理一次，并且读取时**等到文件大小连续两次一致**才上传：
+
+> 系统写相册不是原子的，对一次截图会触发多次 `onChange`（插入、`IS_PENDING` 置 0 各一次）。
+> 如果某次读到的还是没写完的半截数据，它的哈希与完整版不同，
+> 「按内容哈希去重」那道防线就失效了 —— 同一张截图会以两个不同的 hash 各上行一次。
+
+#### 2. 设置窗口的「取消」点了没反应
+
+按钮只设了 `DialogResult = DialogResult.Cancel`，而本窗口是用 `Show()` **非模态**打开的，
+`DialogResult` 只有 `ShowDialog()` 才会自动关窗 —— 所以点下去什么都不发生。
+改成显式 `Close()`；未保存的改动本来就没写回配置，关掉即等于取消。
 
 ### v0.0.6 改动内容
 
@@ -472,11 +500,11 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.6-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.6-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.6-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.6.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
-| `clipbridge-windows-0.0.6-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
+| `clipbridge-server-0.0.7-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.7-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.7-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.7.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.7-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
@@ -557,12 +585,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.6-x64.zip`，
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.7-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
   首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.6.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.7.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。

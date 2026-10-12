@@ -261,14 +261,21 @@ object SyncEngine {
                 return
             }
 
+            // 同一份内容刚同步过就跳过。上游把同一条投递两次时（同一张图被广播两遍），
+            // 不挡的话三端都会留下重复的一份 —— 这里同时兼顾"回环"和"真重复"。
+            val hash = Hashing.sha256(bytes)
+            if (HashCache.contains(hash)) {
+                StatusHolder.statusText.value = "跳过重复收到的图片"
+                Log.i(TAG, "图片重复，已跳过")
+                return
+            }
+            HashCache.add(hash)
+
             val uri = saveImage(ctx, bytes)
             if (uri == null) {
                 StatusHolder.statusText.value = "图片保存失败"
                 return
             }
-
-            // 用下载内容的哈希登记，避免任何回环
-            HashCache.add(Hashing.sha256(bytes))
 
             val inClipboard = ClipboardWriter.writeImage(ctx, uri)
             StatusHolder.statusText.value =

@@ -225,11 +225,20 @@ public sealed class SyncOrchestrator : IDisposable
     {
         try
         {
-            // 关键：先登记哈希。写入剪贴板会立刻触发本机的 WM_CLIPBOARDUPDATE，
+            var src = string.IsNullOrEmpty(payload.SrcName) ? "其他设备" : payload.SrcName;
+
+            // 同一份内容刚同步过就跳过。上游把同一条投递两次时（服务端重复广播、
+            // 或对端把收到的图又上行了一次），不挡的话三端都会留下重复的一份。
+            if (_cache.Contains(payload.Hash))
+            {
+                var shortHash = payload.Hash[..Math.Min(12, payload.Hash.Length)];
+                Log.Info($"跳过重复内容（{shortHash}，来自 {src}）");
+                return;
+            }
+
+            // 登记哈希：写入剪贴板会立刻触发本机的 WM_CLIPBOARDUPDATE，
             // 监听器必须在那一刻能查到该哈希并跳过，否则形成回环。
             _cache.Add(payload.Hash);
-
-            var src = string.IsNullOrEmpty(payload.SrcName) ? "其他设备" : payload.SrcName;
 
             if (payload.Kind == ClipKind.Text)
             {

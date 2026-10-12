@@ -67,6 +67,16 @@ class ScreenshotWatcher(private val ctx: Context) {
     private var observer: ContentObserver? = null
     private var startedAtMs = 0L
 
+    /**
+     * 已经处理过的 MediaStore 条目。
+     *
+     * 系统对一次截图会触发**多次** onChange（插入、IS_PENDING 置 0 各一次），
+     * 而 handle() 每次都重新读文件 —— 如果某次读到的还是没写完的半截数据，
+     * 内容哈希就和完整版不同，HashCache 那道去重挡不住，结果同一张截图被上行两次。
+     * 所以这里按条目直接去重。（handle 都在同一个 HandlerThread 上跑，不用加锁。）
+     */
+    private val handledUris = HashSet<String>()
+
     fun isRunning(): Boolean = observer != null
 
     /** 注册监听。没权限时直接返回 false，由调用方提示用户。 */
@@ -100,6 +110,7 @@ class ScreenshotWatcher(private val ctx: Context) {
     fun stop() {
         observer?.let { runCatching { ctx.contentResolver.unregisterContentObserver(it) } }
         observer = null
+        handledUris.clear()
         thread?.quitSafely()
         thread = null
         StatusHolder.addDiag("截图监听已停止")
@@ -107,14 +118,36 @@ class ScreenshotWatcher(private val ctx: Context) {
 
     // ---------- 单个新图片 ----------
 
+    /**
+     * 读文件，等到大小连续两次一致再返回。
+     *
+     * 系统写相册不是原子的：读太早会拿到截断的数据，而截断版和完整版的哈希不同，
+     * HashCache 那道去重就失效了 —— 同一张截图会以两个不同的 hash 各上行一次。
+     * 这里最多等 8 轮 × 150ms。（跑在 HandlerThread 上，sleep 不卡 UI。）
+     */
+    private fun readStableBytes(uri: Uri, name: String): ByteArray? {
+        var lastSize = -1
+        repeat(8) {
+            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null && bytes.isNotEmpty() && bytes.size == lastSize) return bytes
+            lastSize = bytes?.size ?: -1
+            Thread.sleep(150)
+        }
+        StatusHolder.addDiag("截图文件迟迟不稳定，已放弃：$name")
+        return null
+    }
+
     private fun handle(uri: Uri) {
         try {
+            // 同一个条目只处理一次：见 handledUris 的说明
+            if (!handledUris.add(uri.toString())) return
+
             val info = queryInfo(uri) ?: return
             if (!info.looksLikeScreenshot) return
             // 只认比监听启动更晚的文件，避免把相册里的历史截图补发出去
             if (info.addedAtMs < startedAtMs) return
 
-            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            val bytes = readStableBytes(uri, info.name)
             if (bytes == null || bytes.isEmpty()) {
                 StatusHolder.addDiag("截图读取失败或为空：${info.name}")
                 return

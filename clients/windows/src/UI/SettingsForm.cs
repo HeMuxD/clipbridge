@@ -190,8 +190,11 @@ public sealed class SettingsForm : Form
             Text = "取消",
             Location = new Point(420, ClientSize.Height - 44),
             Size = new Size(84, 30),
-            DialogResult = DialogResult.Cancel,
         };
+        // 本窗体是用 Show() 非模态打开的，而 DialogResult 只有 ShowDialog() 才会
+        // 自动关窗 —— 只设 DialogResult 等于点了没反应。这里显式 Close()。
+        // 未保存的改动本来就没写回 _settings，所以关掉就是"取消"。
+        cancel.Click += (_, _) => Close();
         Controls.Add(cancel);
 
         var openLogs = new Button
