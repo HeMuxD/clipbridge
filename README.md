@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.2** — [本版改动](#v002-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.3** — [本版改动](#v003-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,8 +169,48 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.2** | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
+| **v0.0.3** | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
+| v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.3 改动内容
+
+这一版**只改服务端部署**，跨端协议与 Android 客户端没有变化 —— v0.0.2 的 APK 可以继续用。
+
+#### 证书可以在容器内自动签发与续期（新增，可选）
+
+以前证书只能在宿主机上签好再挂进容器：宿主机得装 acme.sh、续期要靠自己挂计划任务，
+而且因为容器读的是**只读**挂载，续期后只能 `docker restart` —— 每次都会断连几秒。
+
+现在设置 `CLIPBRIDGE_ACME_DOMAIN` 就让容器自己管：下载 acme.sh、用 DNS-01 签发、
+装进数据卷，每 12 小时检查一次续期，证书真的变了才 `nginx -s reload`（**不断开现有连接**）。
+不设这个变量时，行为与之前完全一致。
+
+首次签发放在**后台、不阻塞启动**：没有证书时先以明文 HTTP 提供服务，签好后自动切到 HTTPS，
+不必对着日志干等一两分钟。整段包在 `set +e` 的子 shell 里 ——
+证书出任何问题都只能影响它自己，**不会把服务拖挂**。
+
+#### 修复（真机部署才暴露出来的两个致命问题）
+
+- **acme.sh 的状态落在容器可写层**：设了 `ACME_HOME` 却没告诉 acme.sh，
+  于是账号密钥、域名密钥、证书元数据全写进 `/root/.acme.sh` —— 容器一重建就蒸发，
+  只剩 `certs/` 里那份静态证书：**能用到过期，但永远不会续期**。
+  已用 `LE_WORKING_DIR` 指到数据卷
+- **acme.sh 的请求会永久挂住**：Let's Encrypt 的 API 同时有 A 与 AAAA 记录，容器会先试 IPv6，
+  而 Docker 默认 bridge 没有 IPv6 出口（不是立刻失败，而是挂到超时）；acme.sh 对 POST 请求
+  又不设响应超时 —— 第一次丢包就永久卡死（实测 `finalize` 那步挂着数分钟不动）。
+  现在默认强制 IPv4，容器内实测 **5/5 成功**
+- **`apk add` 卡死在 `dl-cdn.alpinelinux.org`**（国内），构建直接中断、看不出原因。
+  新增 `ALPINE_MIRROR` 构建参数，默认阿里云；海外环境可覆盖回官方源
+
+#### 其它
+
+- 模式 A 的 `--reloadcmd` 从 `docker restart` 改为 `docker exec clipbridge nginx -s reload`：
+  证书目录是按**目录**挂载的，新文件立刻可见，热加载不会断开现有连接
+- `.gitignore` 补上 `acme-credentials*`（放行 `*.example`）、`certs/`、`acme-state/`
+
+> ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
+> `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。
 
 ### v0.0.2 改动内容
 
@@ -282,10 +322,10 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.2-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.2-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.2-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.2.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-server-0.0.3-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.3-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.3-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.3.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 > **Windows 客户端**本版未提供预编译产物（构建环境无 .NET SDK），
@@ -370,7 +410,7 @@ go run ./cmd/clipbridge -config config.example.yaml
 ### 客户端
 
 - **Windows**：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`，运行后填入服务端地址 + 配对码即可。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.2.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.3.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
