@@ -17,6 +17,89 @@
 
 ---
 
+## 快速开始
+
+### 服务端（Docker 一键，单容器）
+
+镜像里同时包含 **Go 二进制**与 **Nginx**，只需要一个容器、两条挂载。
+
+```bash
+cd deploy/docker
+cp .env.example .env
+# 编辑 .env，填三项：
+#   CLIPBRIDGE_SERVER_NAME      → 你的域名
+#   CLIPBRIDGE_PUBLIC_BASE_URL  → https://<域名>:8443  （必须带端口）
+#   CLIPBRIDGE_JWT_SECRET       → openssl rand -hex 32
+docker compose up -d --build
+docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
+```
+
+> **构建卡在 `apk add` 不动？** 基础镜像的 apk 源默认是 `dl-cdn.alpinelinux.org`，国内会挂住。
+> 现在 Dockerfile 默认换成阿里云（`CLIPBRIDGE_ALPINE_MIRROR` 可覆盖），海外环境设成
+> `https://dl-cdn.alpinelinux.org/alpine` 即可。
+
+**端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
+`.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
+注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
+
+**证书**：80/443 被封，只能用 **DNS-01** 验证。两种模式，默认是 A。
+
+**A) 容器外签发**：把宿主机上 acme.sh 签好的证书装进 `CLIPBRIDGE_CERT_DIR` 指向的目录：
+
+```bash
+acme.sh --install-cert -d <域名> --ecc \
+  --fullchain-file <CERT_DIR>/fullchain.pem \
+  --key-file       <CERT_DIR>/privkey.pem \
+  --reloadcmd      "docker exec clipbridge nginx -s reload"
+```
+
+（用 `nginx -s reload` 而不是 `docker restart`：续期时不会断开现有连接。）
+
+**B) 容器内自动签发与续期**：宿主机上什么都不用装，在 `.env` 里加一行即可——
+
+```bash
+CLIPBRIDGE_ACME_DOMAIN=nas.hemu.ink
+CLIPBRIDGE_ACME_EMAIL=admin@example.com
+CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
+```
+
+容器会自己下载 acme.sh、签发、每 12 小时检查续期，并在证书就绪时热加载 nginx；
+首次签发期间先以明文 HTTP 提供服务，不阻塞启动。证书存在数据卷里，不需要 sudo 去拷。
+
+> **为什么默认强制 IPv4**（`CLIPBRIDGE_ACME_IPV4_ONLY=1`）：Docker 默认 bridge 没有 IPv6 出口，
+> 容器解析到 AAAA 后会先试 IPv6 然后挂到超时；而 acme.sh 对 POST 请求**不设响应超时**，
+> 一次丢包就永久卡死（实测 `finalize` 那步挂着数分钟不动，强制 IPv4 后连续 5 次全部成功）。
+> 只有在你确认本机 IPv6 更稳时才设成 0。
+
+> ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
+> `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。
+
+两种模式都没有证书时容器不会崩，会降级为"仅明文 HTTP"并在日志里说明 ——
+但 Android 9+ 拒绝明文，所以手机端要等证书就位。
+
+或本机直接跑（需 Go 1.22+）：
+
+```bash
+cd server
+go run ./cmd/clipbridge -config config.example.yaml
+```
+
+### 客户端
+
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.11-x64.zip`，
+  解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
+  首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
+  自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
+  —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.11.apk`；
+  或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
+  装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
+  之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
+
+> 完整的环境搭建、部署、排障见 `docs/开发指南.md`。
+
+---
+
 ## 为什么需要它
 
 市面上剪贴板同步工具不少，但大多有这些痛点：数据要过第三方服务器、只能局域网、只支持文本、或者需要手动点"发送"。ClipBridge 的定位是：
@@ -649,89 +732,6 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 cd deploy/docker && cp .env.example .env && vi .env
 docker compose up -d --build
 ```
-
----
-
-## 快速开始
-
-### 服务端（Docker 一键，单容器）
-
-镜像里同时包含 **Go 二进制**与 **Nginx**，只需要一个容器、两条挂载。
-
-```bash
-cd deploy/docker
-cp .env.example .env
-# 编辑 .env，填三项：
-#   CLIPBRIDGE_SERVER_NAME      → 你的域名
-#   CLIPBRIDGE_PUBLIC_BASE_URL  → https://<域名>:8443  （必须带端口）
-#   CLIPBRIDGE_JWT_SECRET       → openssl rand -hex 32
-docker compose up -d --build
-docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
-```
-
-> **构建卡在 `apk add` 不动？** 基础镜像的 apk 源默认是 `dl-cdn.alpinelinux.org`，国内会挂住。
-> 现在 Dockerfile 默认换成阿里云（`CLIPBRIDGE_ALPINE_MIRROR` 可覆盖），海外环境设成
-> `https://dl-cdn.alpinelinux.org/alpine` 即可。
-
-**端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
-`.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
-注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
-
-**证书**：80/443 被封，只能用 **DNS-01** 验证。两种模式，默认是 A。
-
-**A) 容器外签发**：把宿主机上 acme.sh 签好的证书装进 `CLIPBRIDGE_CERT_DIR` 指向的目录：
-
-```bash
-acme.sh --install-cert -d <域名> --ecc \
-  --fullchain-file <CERT_DIR>/fullchain.pem \
-  --key-file       <CERT_DIR>/privkey.pem \
-  --reloadcmd      "docker exec clipbridge nginx -s reload"
-```
-
-（用 `nginx -s reload` 而不是 `docker restart`：续期时不会断开现有连接。）
-
-**B) 容器内自动签发与续期**：宿主机上什么都不用装，在 `.env` 里加一行即可——
-
-```bash
-CLIPBRIDGE_ACME_DOMAIN=nas.hemu.ink
-CLIPBRIDGE_ACME_EMAIL=admin@example.com
-CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
-```
-
-容器会自己下载 acme.sh、签发、每 12 小时检查续期，并在证书就绪时热加载 nginx；
-首次签发期间先以明文 HTTP 提供服务，不阻塞启动。证书存在数据卷里，不需要 sudo 去拷。
-
-> **为什么默认强制 IPv4**（`CLIPBRIDGE_ACME_IPV4_ONLY=1`）：Docker 默认 bridge 没有 IPv6 出口，
-> 容器解析到 AAAA 后会先试 IPv6 然后挂到超时；而 acme.sh 对 POST 请求**不设响应超时**，
-> 一次丢包就永久卡死（实测 `finalize` 那步挂着数分钟不动，强制 IPv4 后连续 5 次全部成功）。
-> 只有在你确认本机 IPv6 更稳时才设成 0。
-
-> ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
-> `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。
-
-两种模式都没有证书时容器不会崩，会降级为"仅明文 HTTP"并在日志里说明 ——
-但 Android 9+ 拒绝明文，所以手机端要等证书就位。
-
-或本机直接跑（需 Go 1.22+）：
-
-```bash
-cd server
-go run ./cmd/clipbridge -config config.example.yaml
-```
-
-### 客户端
-
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.11-x64.zip`，
-  解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
-  首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
-  自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
-  —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.11.apk`；
-  或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
-  装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
-  之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
-
-> 完整的环境搭建、部署、排障见 `docs/开发指南.md`。
 
 ---
 
