@@ -317,6 +317,10 @@ docker compose up -d --build
 docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
 ```
 
+> **构建卡在 `apk add` 不动？** 基础镜像的 apk 源默认是 `dl-cdn.alpinelinux.org`，国内会挂住。
+> 现在 Dockerfile 默认换成阿里云（`CLIPBRIDGE_ALPINE_MIRROR` 可覆盖），海外环境设成
+> `https://dl-cdn.alpinelinux.org/alpine` 即可。
+
 **端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
 `.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
 注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
@@ -344,6 +348,11 @@ CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
 
 容器会自己下载 acme.sh、签发、每 12 小时检查续期，并在证书就绪时热加载 nginx；
 首次签发期间先以明文 HTTP 提供服务，不阻塞启动。证书存在数据卷里，不需要 sudo 去拷。
+
+> **为什么默认强制 IPv4**（`CLIPBRIDGE_ACME_IPV4_ONLY=1`）：Docker 默认 bridge 没有 IPv6 出口，
+> 容器解析到 AAAA 后会先试 IPv6 然后挂到超时；而 acme.sh 对 POST 请求**不设响应超时**，
+> 一次丢包就永久卡死（实测 `finalize` 那步挂着数分钟不动，强制 IPv4 后连续 5 次全部成功）。
+> 只有在你确认本机 IPv6 更稳时才设成 0。
 
 > ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
 > `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。

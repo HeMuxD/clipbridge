@@ -31,6 +31,9 @@ services:
         VERSION: "0.0.2"
         # 国内构建保留镜像源；海外机器可改为 https://proxy.golang.org,direct
         GOPROXY: "https://goproxy.cn,direct"
+        # Alpine 软件包源。apk 默认的 dl-cdn 在国内会卡住构建（见 Dockerfile 说明）。
+        # 海外环境在 .env 里设成 https://dl-cdn.alpinelinux.org/alpine 即可。
+        ALPINE_MIRROR: "${CLIPBRIDGE_ALPINE_MIRROR:-https://mirrors.aliyun.com/alpine}"
     image: clipbridge:0.0.2
     container_name: clipbridge
     restart: unless-stopped
@@ -70,6 +73,10 @@ services:
       CLIPBRIDGE_ACME_DNS: "${CLIPBRIDGE_ACME_DNS:-dns_cf}"
       # 调试期设成 1 走 Let's Encrypt 测试环境，避免把生产配额打满
       CLIPBRIDGE_ACME_STAGING: "${CLIPBRIDGE_ACME_STAGING:-0}"
+      # 强制 acme.sh 走 IPv4（默认 1）。Docker 默认 bridge 没有 IPv6 出口，
+      # 不强制的话容器会先试 IPv6 然后挂到超时，而 acme.sh 的 POST 没有响应超时，
+      # 一次丢包就永久卡死。设 0 可关闭。
+      CLIPBRIDGE_ACME_IPV4_ONLY: "${CLIPBRIDGE_ACME_IPV4_ONLY:-1}"
       # acme.sh 下载源（默认 jsDelivr；github raw 在部分网络下慢到无法完成）
       CLIPBRIDGE_ACMESH_BASE: "${CLIPBRIDGE_ACMESH_BASE:-}"
 

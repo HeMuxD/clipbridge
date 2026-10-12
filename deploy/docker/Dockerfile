@@ -18,6 +18,13 @@
 ARG GOLANG_IMAGE=docker.m.daocloud.io/library/golang:1.22-alpine
 ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
 
+# Alpine 软件包源。apk 默认走 dl-cdn.alpinelinux.org —— 这个地址在国内
+# 实测会长时间挂住（本项目踩过：community 的 APKINDEX 拉了数分钟没有任何进展，
+# 构建就此卡死；同一时刻宿主机 curl 该地址却是正常的，问题出在构建容器内的网络路径）。
+# 换成国内镜像后 0.1 秒完成。海外环境覆盖回官方：
+#   docker build --build-arg ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine ...
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+
 # ---------- 阶段 1：编译 Go 服务端 ----------
 FROM ${GOLANG_IMAGE} AS builder
 
@@ -47,12 +54,25 @@ RUN go build \
 # ---------- 阶段 2：Nginx + Go 二进制 ----------
 FROM ${NGINX_IMAGE}
 
+# 在 FROM 之前声明的 ARG 属于"全局作用域"，在阶段内使用必须重新声明一次
+# （不带默认值 = 继承全局默认值），否则这里会拿到空字符串。
+ARG ALPINE_MIRROR
+
 # 运行阶段的基础镜像。除了跑 nginx + Go 二进制，还额外带了 curl / openssl / bash ——
 # 三者都是"容器内自动签发证书"（可选功能，见 entrypoint.sh 的 ACME 段）需要的：
 #   curl/openssl  acme.sh 用它俩做 HTTPS 请求与密钥生成
 #   bash          acme.sh 在 busybox ash 下偶有兼容问题，装 bash 一劳永逸
 # 不用这个功能的话它们只是多占几 MB，不影响任何行为。
-RUN apk add --no-cache ca-certificates tzdata wget curl openssl bash
+#
+# 先把 apk 源换掉再装：基础镜像里的 /etc/apk/repositories 指向 dl-cdn，
+# 不换的话这一步在国内可能永久挂住（见上面 ALPINE_MIRROR 的说明）。
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+        sed -i -e "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" \
+               -e "s|http://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" \
+               /etc/apk/repositories; \
+        echo "apk 源已切换为 $ALPINE_MIRROR:"; cat /etc/apk/repositories; \
+    fi \
+ && apk add --no-cache ca-certificates tzdata wget curl openssl bash
 
 WORKDIR /opt/clipbridge
 

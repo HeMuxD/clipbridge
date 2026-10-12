@@ -76,6 +76,28 @@ APPLIED_CERT=""
 if [ "$ACME_MODE" = "1" ]; then
   ACME_HOME="${CLIPBRIDGE_ACME_HOME:-/var/lib/clipbridge/.acme}"
   ACME_LOG="$ACME_HOME/acme.log"
+
+  # ⚠️ 必须把工作目录告诉 acme.sh，否则它会用默认的 $HOME/.acme.sh ——
+  #    在容器里就是 /root/.acme.sh，属于【可写层】而不是数据卷。
+  #    那样一来账号密钥、域名密钥、证书元数据全都在容器重建时蒸发，
+  #    只剩 certs/ 里那份静态证书：能用到过期，但永远不会续期。
+  #    本项目踩过这个坑（第一版就是忘了设，日志里能看到域名密钥落在
+  #    /root/.acme.sh/…）。指定到数据卷后，acme.sh 的全部状态都持久化。
+  export LE_WORKING_DIR="$ACME_HOME"
+
+  # 强制 acme.sh 的所有 HTTP 请求走 IPv4。
+  #
+  # 为什么必须这么做（本项目实测）：
+  #   · Let's Encrypt 的 API 在 Cloudflare 后面，同时有 A 与 AAAA 记录；
+  #     容器里默认会先试 IPv6，而 Docker 默认 bridge 没有 IPv6 出口 ——
+  #     不是立刻失败，而是连接挂到超时。
+  #   · 更致命的是 acme.sh 对 POST 请求【不设响应超时】，一次丢包就永久卡死
+  #     （实测 finalize 那一步挂了数分钟，进程一直不动）。
+  #   · 实测：容器内强制 IPv4 连续 5 次全部成功；不强制时偶发超时。
+  # 设为 0 可关闭（比如你的环境 IPv6 更稳）。
+  if [ "${CLIPBRIDGE_ACME_IPV4_ONLY:-1}" = "1" ]; then
+    export ACME_USE_IPV4_REQUESTS=1
+  fi
   ACME_DOMAIN="$CLIPBRIDGE_ACME_DOMAIN"
   ACME_EMAIL="${CLIPBRIDGE_ACME_EMAIL:-}"
   ACME_DNS="${CLIPBRIDGE_ACME_DNS:-dns_cf}"
