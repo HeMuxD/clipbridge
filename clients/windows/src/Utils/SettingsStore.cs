@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClipBridge.Models;
@@ -71,7 +72,10 @@ public static class SettingsStore
 
         if (changed && string.IsNullOrEmpty(settings.Token))
         {
-            // 只有还没配对过才写盘，避免覆盖正常配置
+            // 只有还没配对过才写盘，避免覆盖正常配置。
+            // 必须真的落盘：否则设备 ID 每次启动都会重新生成，
+            // 服务端会把同一台机器当成不同设备。
+            Save(settings);
         }
         return settings;
     }

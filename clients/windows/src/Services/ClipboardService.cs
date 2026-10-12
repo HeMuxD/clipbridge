@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using ClipBridge.Interop;
 using ClipBridge.Models;
 using ClipBridge.Utils;
