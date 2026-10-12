@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.5** — [本版改动](#v005-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.6** — [本版改动](#v006-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,11 +169,65 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.5** | 2026-10-12 | Windows 客户端首次提供预编译产物；收到的图片可另存到本地目录；修掉配对按钮点不动等 4 个界面问题 |
+| **v0.0.6** | 2026-10-12 | 修掉 4 个实测暴露的问题：Windows 下行写不进剪贴板、配置不落盘、手机回传「�PNG」、托盘设置要点两次 |
+| v0.0.5 | 2026-10-12 | Windows 客户端首次提供预编译产物；收到的图片可另存到本地目录；修掉配对按钮点不动等 4 个界面问题 |
 | v0.0.4 | 2026-10-12 | Android 拆出设置页、配对后锁定参数、诊断容量可配、通知小图标改位图 |
 | v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.6 改动内容
+
+**建议所有用 v0.0.5 的人升级到这一版** —— v0.0.5 首发时的 Windows 客户端有一个
+致命问题（**下行内容写不进剪贴板**，等于收不到任何东西），已在这一版修掉。
+
+跨端协议零变化；服务端只有版本号一行改动
+（`git diff v0.0.5 v0.0.6 -- server/ shared/` 只命中 `buildinfo.go`），
+**已经在跑 v0.0.5 服务端的不需要重新部署。**
+
+#### 1. Windows 收不到任何内容（致命）
+
+远端文本 / 图片能下载、图片也能落盘，**但剪贴板永远是空的**，
+日志只有一句「写入剪贴板失败」，不给任何原因。
+
+根因：WinForms 的 `Clipboard` 底层是 OLE，**要求调用线程处于 STA 模式**。
+读取那条路是对的（消息泵线程显式设了 STA，注释里也写着这个要求），
+但**下行写入是从 `Task.Run` 的 ThreadPool（MTA）线程调用的**，
+`Clipboard.SetDataObject` 当场抛 `ThreadStateException` ——
+而写入失败分支的 `catch { return false; }` 把它一起吞了。
+
+修法：新增 `StaDispatcher`（一条专用 STA 线程 + 队列），下行的文本 / 图片写入
+一律经它派发；写入失败分支改为记录异常类型与消息，不再静默返回 false。
+
+#### 2. 配置不落盘、空地址空转
+
+- `SettingsStore.Load()` 只在"Token 为空"时才写 `settings.json`。但 `token.bin` 与
+  `settings.json` 是两个文件，二者不同步时（配置被删、或早先写盘失败）会出现
+  "有 token 但没有配置"—— 此时条件为假，配置永远补不回来，
+  表现是**设备 ID 每次启动都变**，服务端会把同一台机器认成不同设备。
+- `SyncOrchestrator.Start()` 只检查 Token 非空就发起连接，地址为空时会以空 URI
+  无限重连，日志被 `Invalid URI: The hostname could not be parsed` 刷满。
+
+#### 3. 手机收到截图后会回传「�PNG」
+
+真机现象：PC 截图后，手机紧接着上行一条内容是 `�PNG` 的"文本"，把 PC 剪贴板顶掉。
+
+根因：`ClipboardAccessibilityService` 读剪贴板时用了 `ClipData.Item.coerceToText()`。
+它对**带 URI 的条目**会去请求一个文本类型的流，而部分 ROM 的 MediaStore 会真的
+把 PNG 字节返回，于是二进制被解码成乱码、被当成"用户复制的文本"上行回 PC。
+
+修法：剪贴板里若是刚写入的远端图片（URI / image MIME），**整次检查直接跳过**；
+`readClipboardText()` 只认 `item.text`，不再使用 `coerceToText`。
+
+#### 4. 托盘菜单第一次点「设置…」没反应
+
+`TrayIcon.CreateIcon()` 缓存了 Icon 对象并**直接返回同一实例**，而换图标时会
+`old?.Dispose()` —— 连接成功那一刻两者就是同一个对象，等于把缓存自己释放了。
+之后构造设置窗口时设 `Icon` 抛 `ObjectDisposedException`，
+而 `RunOnUi` 里的 `catch { }` 把它吞了，所以"第一次点没反应、第二次才行"。
+
+修法：图标改为"静态模板 + 对外返回 `Clone`"；`RunOnUi` 改用句柄明确属于 UI 线程的
+隐藏控件当锚点（ToolStrip 的句柄创建时机不稳），并把异常记进日志而不是静默吞掉。
 
 ### v0.0.5 改动内容
 
@@ -418,11 +472,11 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.5-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.5-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.5-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.5.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
-| `clipbridge-windows-0.0.5-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
+| `clipbridge-server-0.0.6-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.6-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.6-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.6.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.6-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
@@ -503,12 +557,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.5-x64.zip`，
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.6-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
   首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.5.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.6.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
