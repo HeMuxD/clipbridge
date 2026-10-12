@@ -151,10 +151,18 @@ func janitor(ctx context.Context, st *store.Store, cfg *config.Config, log *slog
 			if cfg.Storage.MaxDiskUsage > 0 {
 				usage, err := st.DiskUsage()
 				if err == nil && usage > cfg.Storage.MaxDiskUsage {
-					log.Warn("磁盘占用超过上限，将触发清理",
+					log.Warn("磁盘占用超过上限，开始按最旧优先清理",
 						"usageMB", usage>>20, "limitMB", cfg.Storage.MaxDiskUsage>>20)
-					// 立即清一轮过期内容；若仍超限，需要人工介入或调小保留天数
+
+					// 先清过期内容，再按最旧优先兜底删到上限以内 ——
+					// 只跑 CleanupExpired 的话，retention_days=0 或"最近的量本身就超限"
+					// 时一条都删不掉，上限等于没设。
 					_, _ = st.CleanupExpired()
+					if n, err := st.TrimToDiskLimit(cfg.Storage.MaxDiskUsage); err != nil {
+						log.Error("按最旧优先清理失败", "err", err)
+					} else if n > 0 {
+						log.Info("已按最旧优先清理", "count", n)
+					}
 				}
 			}
 		}

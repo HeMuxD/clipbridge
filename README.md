@@ -11,7 +11,7 @@
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**当前版本 v0.0.7** — [本版改动](#v007-改动内容) · [下载产物](../../releases/latest)
+**当前版本 v0.0.8** — [本版改动](#v008-改动内容) · [下载产物](../../releases/latest)
 
 </div>
 
@@ -169,13 +169,51 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| **v0.0.7** | 2026-10-12 | 修掉同一张截图在三端各出现两份（下行缺去重）、设置窗口「取消」点了没反应 |
+| **v0.0.8** | 2026-10-12 | 服务端：修掉过期文件删不掉（磁盘只涨不降）、补齐 `max_disk_usage` 的按最旧清理；Windows 客户端加应用图标 |
+| v0.0.7 | 2026-10-12 | 修掉同一张截图在三端各出现两份（下行缺去重）、设置窗口「取消」点了没反应 |
 | v0.0.6 | 2026-10-12 | 修掉 4 个实测暴露的问题：Windows 下行写不进剪贴板、配置不落盘、手机回传「�PNG」、托盘设置要点两次 |
 | v0.0.5 | 2026-10-12 | Windows 客户端首次提供预编译产物；收到的图片可另存到本地目录；修掉配对按钮点不动等 4 个界面问题 |
 | v0.0.4 | 2026-10-12 | Android 拆出设置页、配对后锁定参数、诊断容量可配、通知小图标改位图 |
 | v0.0.3 | 2026-10-12 | 证书可在容器内自动签发与续期（可选），并修掉两个真机部署才暴露的致命问题 |
 | v0.0.2 | 2026-09-30 | Android 后台保护、诊断面板收敛、配对持久化、图标重做 |
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
+
+### v0.0.8 改动内容
+
+> ⚠️ **这一版动了服务端**（清理逻辑），需要把新的服务端二进制 / 镜像重新部署一次。
+> 跨端协议没有变化，客户端可以单独升级。
+
+#### 1. 服务端：过期文件删不掉，磁盘只涨不降
+
+`CleanupExpired()` 删除磁盘文件时用的是 `fileDir/fileID`，而**写入时是 `fileID + 扩展名`**
+（`SaveFile` 里写的就是 `fileID + ext`）。少了扩展名，`os.Remove` 直接失败 ——
+于是**数据库记录被清掉了、文件永远留在 `data/files/` 里成为孤儿**：
+`DiskUsage()` 只涨不降，磁盘占用一路往上走。
+
+（同一个文件里的 `FindFileExt()` 用的正是 `fileID + ".*"` 去 Glob，说明磁盘上带扩展名这件事
+作者是清楚的，只是删除那处漏了。）
+
+**修法**：抽出 `Store.removeFile()`，按 `fileID.*` 通配删除，`CleanupExpired` 改用它。
+
+#### 2. 服务端：`max_disk_usage` 其实并没有"按最旧清理"
+
+配置注释写的是"超出后从最旧记录开始清理"，`janitor` 的函数注释也写"按最旧优先删除"，
+**但实现只是再跑一遍 `CleanupExpired()`** —— 而那只删"已过期"的内容。
+如果 `retention_days: 0`（永久保留），或者最近的量本身就超过上限，**它一条都删不掉**，
+上限形同虚设，只剩一条告警日志。
+
+**修法**：新增 `Store.TrimToDiskLimit(limit)` —— 按 `created_at ASC` 分批（每批 50 条）
+删除内容与文件，直到占用降回上限以内；`janitor` 在过期清理之后调用它兜底。
+
+#### 3. Windows 客户端有了应用图标
+
+exe 之前用的是 .NET 的默认图标。现在换成了与托盘图标同款的剪贴板图案：
+
+- 由 `clients/windows/make_app_icon.py` 生成（Pillow，32 倍超采样后再缩小），
+  输出 16/24/32/48/64/128/256 七个尺寸，**可重复执行**
+- csproj 用 `<ApplicationIcon>` 引用 `assets/clipbridge.ico`，
+  资源管理器、任务栏、快捷方式都会显示
+- 托盘图标仍是运行时绘制的那套（因为要按连接状态变色）
 
 ### v0.0.7 改动内容
 
@@ -500,11 +538,11 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 | 产物 | 平台 | 说明 |
 | --- | --- | --- |
-| `clipbridge-server-0.0.7-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
-| `clipbridge-server-0.0.7-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
-| `clipbridge-server-0.0.7-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
-| `clipbridge-android-0.0.7.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
-| `clipbridge-windows-0.0.7-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
+| `clipbridge-server-0.0.8-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制 + 配置样例 + 建表 SQL + systemd / nginx 配置 |
+| `clipbridge-server-0.0.8-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
+| `clipbridge-server-0.0.8-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+| `clipbridge-android-0.0.8.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.8-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
@@ -585,12 +623,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.7-x64.zip`，
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.8-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
   首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
-- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.7.apk`；
+- **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.8.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。

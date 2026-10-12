@@ -262,9 +262,86 @@ func (s *Store) CleanupExpired() (int, error) {
 	_, _ = s.db.Exec(`DELETE FROM pending_deliveries WHERE expires_at < ?`, now)
 
 	for _, fid := range fileIDs {
-		_ = os.Remove(filepath.Join(s.fileDir, fid))
+		s.removeFile(fid)
 	}
 	return int(n), nil
+}
+
+// removeFile 删除某个 fileId 对应的磁盘文件。
+//
+// 磁盘上的文件名是 fileID + 扩展名（见 SaveFile），所以必须按前缀匹配着删 ——
+// 之前这里直接 os.Remove(fileDir/fileID)，是删不掉的：
+// 数据库记录清了、文件却一直留在盘上，DiskUsage() 只涨不降。
+func (s *Store) removeFile(fileID string) {
+	if fileID == "" {
+		return
+	}
+	matches, err := filepath.Glob(filepath.Join(s.fileDir, fileID+".*"))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// TrimToDiskLimit 在磁盘占用超过 limit 时按"最旧优先"删除内容与文件，
+// 直到占用降回上限以内，返回删除的条数。
+//
+// 之前 janitor 发现超限时只是再跑一遍 CleanupExpired()，而那只删"已过期"的内容 ——
+// 若 retention_days 设为 0（永久保留），或者最近的量本身就超过上限，
+// 就一条也删不掉，max_disk_usage 形同虚设（只剩一条告警日志）。
+// 这里补上真正的兜底。
+func (s *Store) TrimToDiskLimit(limit int64) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+
+	removed := 0
+
+	// 每轮删 50 条后重新统计；最多 200 轮，避免极端情况下反复咬合
+	for round := 0; round < 200; round++ {
+		usage, err := s.DiskUsage()
+		if err != nil {
+			return removed, err
+		}
+		if usage <= limit {
+			break
+		}
+
+		rows, err := s.db.Query(
+			`SELECT id, COALESCE(file_id, '') FROM clips ORDER BY created_at ASC, id ASC LIMIT 50`)
+		if err != nil {
+			return removed, err
+		}
+
+		type target struct {
+			id  int64
+			fid string
+		}
+		var batch []target
+		for rows.Next() {
+			var t target
+			if err := rows.Scan(&t.id, &t.fid); err == nil {
+				batch = append(batch, t)
+			}
+		}
+		rows.Close()
+
+		if len(batch) == 0 {
+			break // 没有可删的了
+		}
+
+		for _, t := range batch {
+			if _, err := s.db.Exec(`DELETE FROM clips WHERE id = ?`, t.id); err != nil {
+				continue
+			}
+			s.removeFile(t.fid)
+			removed++
+		}
+	}
+
+	return removed, nil
 }
 
 // ---------- 离线队列 ----------
