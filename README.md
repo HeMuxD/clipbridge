@@ -321,16 +321,35 @@ docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可
 `.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
 注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
 
-**证书**：用 acme.sh 的 DNS-01 方式签发（不占用 80 端口），把证书装进 `CLIPBRIDGE_CERT_DIR` 指向的目录：
+**证书**：80/443 被封，只能用 **DNS-01** 验证。两种模式，默认是 A。
+
+**A) 容器外签发**：把宿主机上 acme.sh 签好的证书装进 `CLIPBRIDGE_CERT_DIR` 指向的目录：
 
 ```bash
 acme.sh --install-cert -d <域名> --ecc \
   --fullchain-file <CERT_DIR>/fullchain.pem \
   --key-file       <CERT_DIR>/privkey.pem \
-  --reloadcmd      "docker restart clipbridge"
+  --reloadcmd      "docker exec clipbridge nginx -s reload"
 ```
 
-目录里没有证书时容器不会崩，会降级为"仅明文 HTTP"并在日志里说明 —— 但 Android 9+ 拒绝明文，所以手机端要等证书就位。
+（用 `nginx -s reload` 而不是 `docker restart`：续期时不会断开现有连接。）
+
+**B) 容器内自动签发与续期**：宿主机上什么都不用装，在 `.env` 里加一行即可——
+
+```bash
+CLIPBRIDGE_ACME_DOMAIN=nas.hemu.ink
+CLIPBRIDGE_ACME_EMAIL=admin@example.com
+CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
+```
+
+容器会自己下载 acme.sh、签发、每 12 小时检查续期，并在证书就绪时热加载 nginx；
+首次签发期间先以明文 HTTP 提供服务，不阻塞启动。证书存在数据卷里，不需要 sudo 去拷。
+
+> ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
+> `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。
+
+两种模式都没有证书时容器不会崩，会降级为"仅明文 HTTP"并在日志里说明 ——
+但 Android 9+ 拒绝明文，所以手机端要等证书就位。
 
 或本机直接跑（需 Go 1.22+）：
 

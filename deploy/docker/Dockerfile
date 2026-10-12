@@ -47,10 +47,12 @@ RUN go build \
 # ---------- 阶段 2：Nginx + Go 二进制 ----------
 FROM ${NGINX_IMAGE}
 
-# ca-certificates：出站 HTTPS 需要
-# tzdata：日志时间戳正确
-# wget：健康检查用
-RUN apk add --no-cache ca-certificates tzdata wget
+# 运行阶段的基础镜像。除了跑 nginx + Go 二进制，还额外带了 curl / openssl / bash ——
+# 三者都是"容器内自动签发证书"（可选功能，见 entrypoint.sh 的 ACME 段）需要的：
+#   curl/openssl  acme.sh 用它俩做 HTTPS 请求与密钥生成
+#   bash          acme.sh 在 busybox ash 下偶有兼容问题，装 bash 一劳永逸
+# 不用这个功能的话它们只是多占几 MB，不影响任何行为。
+RUN apk add --no-cache ca-certificates tzdata wget curl openssl bash
 
 WORKDIR /opt/clipbridge
 

@@ -33,3 +33,11 @@ clients/android/.idea/
 *.pem
 *.key
 .env
+
+# 容器内 ACME 模式用的 DNS API 凭据文件（.env.example 之外的都不要提交）
+deploy/docker/acme-credentials
+deploy/docker/acme-credentials.*
+!deploy/docker/acme-credentials.example
+# 证书与 acme.sh 状态目录（容器内 ACME 模式下产生在宿主机上时）
+deploy/docker/certs/
+deploy/docker/acme-state/

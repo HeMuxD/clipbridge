@@ -63,14 +63,35 @@ services:
       # 想容忍几秒网络抖动（重连空档里的内容不丢），改成 60~120。
       CLIPBRIDGE_OFFLINE_REPLAY_SECONDS: "${CLIPBRIDGE_OFFLINE_REPLAY_SECONDS:-0}"
 
+      # ---- 证书：容器内自动签发/续期（可选，见 .env.example 的证书段落）----
+      # 设置 DOMAIN 即启用；不设则完全走"宿主机签发 + 挂载 /certs"的老路，行为不变。
+      CLIPBRIDGE_ACME_DOMAIN: "${CLIPBRIDGE_ACME_DOMAIN:-}"
+      CLIPBRIDGE_ACME_EMAIL: "${CLIPBRIDGE_ACME_EMAIL:-}"
+      CLIPBRIDGE_ACME_DNS: "${CLIPBRIDGE_ACME_DNS:-dns_cf}"
+      # 调试期设成 1 走 Let's Encrypt 测试环境，避免把生产配额打满
+      CLIPBRIDGE_ACME_STAGING: "${CLIPBRIDGE_ACME_STAGING:-0}"
+      # acme.sh 下载源（默认 jsDelivr；github raw 在部分网络下慢到无法完成）
+      CLIPBRIDGE_ACMESH_BASE: "${CLIPBRIDGE_ACMESH_BASE:-}"
+
+      # DNS API 凭据。想避免它出现在 docker inspect 里，就改用下面的
+      # CLIPBRIDGE_ACME_ENV_FILE + 挂载文件（.env.example 里有说明）。
+      CF_Token: "${CF_Token:-}"
+      CLIPBRIDGE_ACME_ENV_FILE: "${CLIPBRIDGE_ACME_ENV_FILE:-}"
+
     volumes:
       # 数据库与图片必须持久化，否则容器重建会丢历史
       - clipbridge-data:/var/lib/clipbridge
-      # TLS 证书目录（只读挂载）
+      # TLS 证书目录（只读挂载）。模式 A 用；容器内 ACME 模式（模式 B）不用它，
+      # 证书会落在上面的数据卷 /var/lib/clipbridge/certs 里。
       - ${CLIPBRIDGE_CERT_DIR:-./certs}:/certs:ro
       # 服务端配置。该文件不存在时 Docker 会创建同名目录并导致启动失败，
       # 仓库里已内置一份，请勿删除。
       - ./config.yaml:/opt/clipbridge/config.yaml:ro
+      # 想用「凭据文件」而不是环境变量传 DNS API Token 时，取消下面这行的注释。
+      # 注意：宿主机上该文件不存在时 Docker 会创建同名【目录】，
+      # entrypoint 会检测到并给出明确报错（不会静默失败）。
+      # 用之前先：cp acme-credentials.example acme-credentials && vi acme-credentials
+      # - ./acme-credentials:/acme-credentials:ro
 
     # 日志轮转，避免长期运行把磁盘写满
     logging:
