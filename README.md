@@ -214,6 +214,21 @@ sequenceDiagram
 > 顺带在设置页的「关于」里加了**版本号显示**。通知图标这类问题的第一步永远是
 > "确认你装的到底是哪一版"。
 
+#### Windows 客户端：补上预编译产物
+
+此前几版 Windows 客户端只有源码、**没有构建产物**（出报告的机器上没有 .NET SDK），
+本次补齐：`clipbridge-windows-0.0.4-x64.zip`，解压即用的单文件 exe。
+
+补齐过程中暴露并修掉了三个问题 —— 它们正好解释了"为什么它一直没被编译过"：
+
+- `ClipboardService.cs` 用了 `ExternalException`，却缺 `using System.Runtime.InteropServices`
+- `SettingsStore.cs` 用了 `DataProtectionScope`，却缺 `using System.Security.Cryptography`
+  → 这两处在 `net8.0-windows` 下是**硬编译错误**；靠"括号配平 + 符号引用"这类静态检查看不出来
+- `SettingsStore.Load()` 里"首次运行生成设备 ID 后写盘"的调用**漏写了**（留了个空 `if` 块），
+  于是未配对前每次启动都会重新生成一个设备 ID，服务端会把同一台机器认成不同设备
+
+已实测：`dotnet publish` 单文件自包含发布通过，连续两次启动设备 ID 一致。
+
 ### v0.0.3 改动内容
 
 这一版**只改服务端部署**，跨端协议与 Android 客户端没有变化 —— v0.0.2 的 APK 可以继续用。
@@ -367,10 +382,8 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 | `clipbridge-server-0.0.4-windows-amd64.zip` | Windows x86-64 | 同上，服务端本体 |
 | `clipbridge-server-0.0.4-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
 | `clipbridge-android-0.0.4.apk` | Android 8.0+ | 客户端安装包（debug 签名，可直接安装） |
+| `clipbridge-windows-0.0.4-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
-
-> **Windows 客户端**本版未提供预编译产物（构建环境无 .NET SDK），
-> 请按下方[客户端](#客户端)一节自行 `dotnet publish`。
 
 **Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
 
@@ -450,7 +463,11 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### 客户端
 
-- **Windows**：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`，运行后填入服务端地址 + 配对码即可。
+- **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.4-x64.zip`，
+  解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
+  首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
+  自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
+  —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
 - **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.4.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
