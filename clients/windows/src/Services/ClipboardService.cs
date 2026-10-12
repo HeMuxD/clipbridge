@@ -216,8 +216,11 @@ public sealed class ClipboardService : IDisposable
             {
                 Thread.Sleep(60);
             }
-            catch
+            catch (Exception ex)
             {
+                // 别静默返回 false：以前这里吞掉了 ThreadStateException，
+                // 于是"下行写不进剪贴板"查了很久都看不出原因
+                Log.Warn($"写入剪贴板（文本）失败：{ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }
@@ -245,8 +248,9 @@ public sealed class ClipboardService : IDisposable
             {
                 Thread.Sleep(60);
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Warn($"写入剪贴板（图片）失败：{ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }

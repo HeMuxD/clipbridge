@@ -18,6 +18,12 @@ public sealed class SyncOrchestrator : IDisposable
     private readonly ScreenshotWatcher _screenshots;
     private readonly SyncClient _client;
 
+    /// <summary>
+    /// 剪贴板写入必须在 STA 线程上做（OLE 的要求），而下行事件来自
+    /// ThreadPool 的 MTA 线程，所以统一走这个派发器。
+    /// </summary>
+    private readonly StaDispatcher _sta = new();
+
     private bool _disposed;
 
     public event Action<string>? StatusMessage;
@@ -230,7 +236,7 @@ public sealed class SyncOrchestrator : IDisposable
                 if (!_settings.SyncText) return;
                 if (payload.Text is null) return;
 
-                var ok = ClipboardService.WriteText(payload.Text);
+                var ok = await _sta.InvokeAsync(() => ClipboardService.WriteText(payload.Text));
                 if (ok)
                 {
                     Log.Info($"已写入远端文本（来自 {src}）");
@@ -254,7 +260,9 @@ public sealed class SyncOrchestrator : IDisposable
                 }
 
                 // 先写剪贴板（用户最直接的感知方式），再往磁盘留一份。
-                var ok = ClipboardService.WriteImage(bytes);
+                // 注意必须切到 STA 线程：下行事件来自 ThreadPool 的 MTA 线程，
+                // 直接在 MTA 上调 Clipboard 会抛 ThreadStateException。
+                var ok = await _sta.InvokeAsync(() => ClipboardService.WriteImage(bytes));
 
                 string? savedPath = null;
                 if (_settings.SaveReceivedImages)
@@ -394,5 +402,6 @@ public sealed class SyncOrchestrator : IDisposable
         _clipboard.Dispose();
         _screenshots.Dispose();
         _client.Dispose();
+        _sta.Dispose();
     }
 }
