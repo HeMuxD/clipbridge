@@ -36,7 +36,15 @@
 CLIPBRIDGE_SERVER_NAME=nas.example.com
 CLIPBRIDGE_PUBLIC_BASE_URL=https://nas.example.com:8443
 
-# 签名密钥：先运行 openssl rand -hex 32，把输出的那一串粘贴到等号右边
+# 签名密钥：一串随机字符，用来给登录令牌签名。
+# 定好之后别再改 —— 改了的话，所有已配对的设备都会掉线、需要重新配对。
+#
+# 怎么生成：打开终端（Windows 在开始菜单搜「PowerShell」，macOS 搜「终端」，
+# NAS 用 SSH 登录），执行下面「对应你系统」的那一行，会得到一串 64 位的字符：
+#   macOS / Linux / NAS →  openssl rand -hex 32
+#   Windows PowerShell →  -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+#
+# 再把这串字符原样粘贴到下面等号右边，替换 CHANGE_ME。
 CLIPBRIDGE_JWT_SECRET=CHANGE_ME
 
 # ============ 证书 ============
@@ -45,7 +53,12 @@ CLIPBRIDGE_JWT_SECRET=CHANGE_ME
 # 域名与邮箱，用于申请 Let's Encrypt 证书
 CLIPBRIDGE_ACME_DOMAIN=nas.example.com
 CLIPBRIDGE_ACME_EMAIL=you@example.com
-# Cloudflare API Token，权限只要 Zone → DNS → Edit
+# Cloudflare API Token（用来自动申请证书）：
+#   1. 登录 Cloudflare → 右上角头像 →「我的个人资料」→「API 令牌」
+#   2.「创建令牌」→ 选「编辑区域 DNS」(Edit zone DNS) 这个模板
+#   3. 区域资源选你自己的域名 → 创建 → 复制生成的那串令牌粘到这里
+#   （用阿里云 / 腾讯云等其它 DNS 的话，需要在文件里另外加一行
+#     CLIPBRIDGE_ACME_DNS=dns_ali（或 dns_dp），并改用该服务商的凭据变量名）
 CF_Token=CHANGE_ME
 
 # ============ 配对码 ============
