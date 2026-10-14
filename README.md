@@ -24,51 +24,80 @@
 镜像已发布在 GHCR 上（**公开，无需登录**，含 `amd64` + `arm64` 双架构）——
 **不用 clone 仓库，也不用本地构建**，拉下来直接跑。
 
-**第一步**：把配置写进 `clipbridge.env`（就是个普通的 .env 文件），
-把里面的示例值（`nas.example.com`、`you@example.com`、`CHANGE_ME`）
-**逐个换成你自己的** —— 它们是占位符不是默认值，留着不改服务会照常启动，
-但证书签不下来、手机端连不上。
+需要设置的配置就下面这几项：
+
+| 变量 | 填什么 |
+| --- | --- |
+| `CLIPBRIDGE_SERVER_NAME` | 你的域名，如 `nas.example.com` |
+| `CLIPBRIDGE_PUBLIC_BASE_URL` | `https://nas.example.com:8443`，端口要和 `-p` 一致 |
+| `CLIPBRIDGE_JWT_SECRET` | 一串随机字符（**生成方法见下**） |
+| `CLIPBRIDGE_ACME_DOMAIN` | 你的域名（申请证书用） |
+| `CLIPBRIDGE_ACME_EMAIL` | 你的邮箱 |
+| `CF_Token` | Cloudflare API Token（**获取方法见下**） |
+| `CLIPBRIDGE_PAIR_CODE` | 自己定一个 8 位数字，多台设备配对时都填它 |
+
+**签名密钥 `CLIPBRIDGE_JWT_SECRET` 怎么来**：一串随机字符，用来给登录令牌签名。
+**定好之后别再改** —— 改了的话，所有已配对的设备都会掉线、需要重新配对。
+生成方法：打开终端（Windows 在开始菜单搜「PowerShell」，macOS 搜「终端」，NAS 用 SSH 登录），
+执行下面「对应你系统」的那一行，会得到一串 64 位的字符：
+
+- macOS / Linux / NAS → `openssl rand -hex 32`
+- Windows PowerShell → `-join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })`
+
+**Cloudflare Token `CF_Token` 怎么来**（用来自动申请证书）：
+
+1. 登录 Cloudflare → 右上角头像 →「我的个人资料」→「API 令牌」
+2.「创建令牌」→ 选「编辑区域 DNS」(Edit zone DNS) 这个模板
+3. 区域资源选你自己的域名 → 创建 → 复制生成的那串令牌
+
+> 换用阿里云 / 腾讯云等其它 DNS 的话，改传 `CLIPBRIDGE_ACME_DNS=dns_ali`（或 `dns_dp`），
+> 并改用该服务商的凭据变量名。
+
+**证书这三项都不填也能跑**，但只有明文 HTTP —— 而 Android 9+ 默认拒绝明文，手机端连不上。
+
+把配置传进去有两种方式，**推荐第一种**：
+
+#### 方式一（推荐）：直接写在命令里
+
+不用建任何文件。把下面命令里的域名和 `CHANGE_ME` 换成你自己的值，整条复制执行：
+
+```bash
+docker run -d --name clipbridge \
+  --restart unless-stopped \
+  -p 8443:8443 \
+  -e CLIPBRIDGE_SERVER_NAME=nas.example.com \
+  -e CLIPBRIDGE_PUBLIC_BASE_URL=https://nas.example.com:8443 \
+  -e CLIPBRIDGE_JWT_SECRET=CHANGE_ME \
+  -e CLIPBRIDGE_ACME_DOMAIN=nas.example.com \
+  -e CLIPBRIDGE_ACME_EMAIL=you@example.com \
+  -e CF_Token=CHANGE_ME \
+  -e CLIPBRIDGE_PAIR_CODE=CHANGE_ME \
+  -v clipbridge-data:/var/lib/clipbridge \
+  ghcr.io/hemuxd/clipbridge:0.0.11
+
+docker logs -f clipbridge     # 配对码打印在这里（多台设备可复用同一个）
+```
+
+#### 方式二：写进文件，用 `--env-file`
+
+嫌上面那条命令太长、或想把配置留档复用，就存成一个 `clipbridge.env`：
 
 ```ini
-# ============ 必填 ============
-
-# 你的域名：把下面几处的 nas.example.com 换掉
+# 你的域名（下面几处都换成它）
 CLIPBRIDGE_SERVER_NAME=nas.example.com
 CLIPBRIDGE_PUBLIC_BASE_URL=https://nas.example.com:8443
 
-# 签名密钥：一串随机字符，用来给登录令牌签名。
-# 定好之后别再改 —— 改了的话，所有已配对的设备都会掉线、需要重新配对。
-#
-# 怎么生成：打开终端（Windows 在开始菜单搜「PowerShell」，macOS 搜「终端」，
-# NAS 用 SSH 登录），执行下面「对应你系统」的那一行，会得到一串 64 位的字符：
-#   macOS / Linux / NAS →  openssl rand -hex 32
-#   Windows PowerShell →  -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-#
-# 再把这串字符原样粘贴到下面等号右边，替换 CHANGE_ME。
+# 随机密钥（生成方法见上面的表格说明），定好后别改
 CLIPBRIDGE_JWT_SECRET=CHANGE_ME
 
-# ============ 证书 ============
-# 不配的话服务端只有明文 HTTP，而 Android 9+ 默认拒绝明文，手机端连不上
-
-# 域名与邮箱，用于申请 Let's Encrypt 证书
+# 申请证书用
 CLIPBRIDGE_ACME_DOMAIN=nas.example.com
 CLIPBRIDGE_ACME_EMAIL=you@example.com
-# Cloudflare API Token（用来自动申请证书）：
-#   1. 登录 Cloudflare → 右上角头像 →「我的个人资料」→「API 令牌」
-#   2.「创建令牌」→ 选「编辑区域 DNS」(Edit zone DNS) 这个模板
-#   3. 区域资源选你自己的域名 → 创建 → 复制生成的那串令牌粘到这里
-#   （用阿里云 / 腾讯云等其它 DNS 的话，需要在文件里另外加一行
-#     CLIPBRIDGE_ACME_DNS=dns_ali（或 dns_dp），并改用该服务商的凭据变量名）
 CF_Token=CHANGE_ME
 
-# ============ 配对码 ============
-
-# 自己定一个 8 位数字：多台设备共用同一个，配对时每台设备都填它。
-# 例如 48217639 —— 别用 12345678 这类连号，服务是对公网开放的。
+# 自己定的 8 位数字
 CLIPBRIDGE_PAIR_CODE=CHANGE_ME
 ```
-
-**第二步**：起服务：
 
 ```bash
 docker run -d --name clipbridge \
@@ -77,16 +106,12 @@ docker run -d --name clipbridge \
   --env-file clipbridge.env \
   -v clipbridge-data:/var/lib/clipbridge \
   ghcr.io/hemuxd/clipbridge:0.0.11
-
-docker logs -f clipbridge     # 配对码打印在这里（多台设备可复用同一个）
 ```
 
+> `#` 注释需要 Docker 25+ 才支持；更老的版本请先删掉注释行再用 `--env-file`。
+> 另外这个文件里有密钥，**别提交到版本库**。
+
 镜像里同时包含 **Go 二进制**与 **Nginx**，一个容器搞定，没有额外依赖。
-
-> ⚠️ `clipbridge.env` 里有 `CF_Token`（等价于"能改你域名解析"的权限）和 `JWT_SECRET`，
-> **别提交到版本库**。
-
-> `#` 注释需要 Docker 25+（2024 年 1 月起支持）；更老的版本请先删掉注释行再用 `--env-file`。
 
 **端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
 改端口时 `-p` 与 `CLIPBRIDGE_PUBLIC_BASE_URL` 里的端口号要同步改 ——
@@ -95,7 +120,7 @@ docker logs -f clipbridge     # 配对码打印在这里（多台设备可复用
 **换版本**：把镜像 tag `0.0.11` 换成目标版本即可（GHCR 上目前有 `0.0.11` 与 `sha-<提交>` 两类标签）。
 
 **证书的另一种给法**：如果你已经用 acme.sh 在宿主机签好了证书，可以不开容器内 ACME ——
-在上面那条 `docker run` 里加一个挂载，并把 `clipbridge.env` 里那三项 ACME 变量删掉：
+在上面那条 `docker run` 里加一个挂载，并把 ACME 那三项配置去掉：
 
 ```bash
 -v /path/to/certs:/certs:ro     # 容器读 /certs/fullchain.pem 与 /certs/privkey.pem
