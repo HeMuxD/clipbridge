@@ -17,114 +17,74 @@
 
 ---
 
-## 开始之前：你需要这两样东西
-
-ClipBridge 是**跨网络**同步的 —— 公司和家里、手机和电脑，走的都是公网。所以它**不是局域网工具**，下面两样是硬性前提，缺一个就跑不通：
-
-| 前提 | 说明 |
-| --- | --- |
-| **公网 IP 或 DDNS** | 服务端必须能被外网访问到。家庭宽带动态 IP 就用 DDNS |
-| **一个域名** | TLS 证书要签发到域名上，而 Android 9+ 强制 HTTPS，用 IP 直连拿不到证书 |
-
-> 运营商通常封锁家庭宽带的 80 / 443 端口，所以 ClipBridge 对外统一用 **8443**，
-> 证书走 **DNS-01** 验证（不占用被封的端口）。
-
----
-
 ## 快速开始
 
-三步跑通：起服务端 → 装客户端 → 配对。
+### 服务端（Docker 一键，单容器）
 
-### ① 起服务端（一条 docker run）
-
-镜像已发布到 GHCR，**不需要装 Go、不需要 clone 仓库、也不用等编译**：
+镜像里同时包含 **Go 二进制**与 **Nginx**，只需要一个容器、两条挂载。
 
 ```bash
-docker run -d --name clipbridge \
-  -e CLIPBRIDGE_PUBLIC_BASE_URL=https://<你的域名>:8443 \
-  -e CLIPBRIDGE_JWT_SECRET=$(openssl rand -hex 32) \
-  -p 8443:8443 \
-  -v clipbridge-data:/var/lib/clipbridge \
-  ghcr.io/hemuxd/clipbridge:0.0.11
+cd deploy/docker
+cp .env.example .env
+# 编辑 .env，填三项：
+#   CLIPBRIDGE_SERVER_NAME      → 你的域名
+#   CLIPBRIDGE_PUBLIC_BASE_URL  → https://<域名>:8443  （必须带端口）
+#   CLIPBRIDGE_JWT_SECRET       → openssl rand -hex 32
+docker compose up -d --build
+docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
 ```
 
-就这些。镜像里同时包含 **Go 二进制**与 **Nginx**，一个容器搞定。
-默认拉取 `0.0.11`（**amd64 + arm64 双架构**，NAS 是 ARM 的也能用）。
+> **构建卡在 `apk add` 不动？** 基础镜像的 apk 源默认是 `dl-cdn.alpinelinux.org`，国内会挂住。
+> 现在 Dockerfile 默认换成阿里云（`CLIPBRIDGE_ALPINE_MIRROR` 可覆盖），海外环境设成
+> `https://dl-cdn.alpinelinux.org/alpine` 即可。
 
-> `CLIPBRIDGE_JWT_SECRET` 请把 `openssl rand -hex 32` 的输出**固定下来**（写进配置而不是每次现生成），
-> 否则容器一重建所有设备都要重新配对。上面为了少打字用了命令替换，方便先跑起来。
+**端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
+`.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
+注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
 
-看配对码：
+**证书**：80/443 被封，只能用 **DNS-01** 验证。两种模式，默认是 A。
+
+**A) 容器外签发**：把宿主机上 acme.sh 签好的证书装进 `CLIPBRIDGE_CERT_DIR` 指向的目录：
 
 ```bash
-docker logs -f clipbridge
+acme.sh --install-cert -d <域名> --ecc \
+  --fullchain-file <CERT_DIR>/fullchain.pem \
+  --key-file       <CERT_DIR>/privkey.pem \
+  --reloadcmd      "docker exec clipbridge nginx -s reload"
 ```
 
-配对码打印在这里，8 位，有效期内多台设备可复用同一个。
+（用 `nginx -s reload` 而不是 `docker restart`：续期时不会断开现有连接。）
 
----
-
-**下面都是可选的，需要再看。**
-
-**换版本**：把镜像 tag `0.0.11` 换成你要的版本即可。
-
-**国内拉取 GHCR 慢**：配一个镜像加速器，`/etc/docker/daemon.json`：
-
-```json
-{ "registry-mirrors": ["https://docker.m.daocloud.io"] }
-```
+**B) 容器内自动签发与续期**：宿主机上什么都不用装，在 `.env` 里加一行即可——
 
 ```bash
-sudo systemctl restart docker
+CLIPBRIDGE_ACME_DOMAIN=nas.hemu.ink
+CLIPBRIDGE_ACME_EMAIL=admin@example.com
+CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
 ```
 
-配完之后 `docker run` 无需任何变化，拉取会自动走加速器。
+容器会自己下载 acme.sh、签发、每 12 小时检查续期，并在证书就绪时热加载 nginx；
+首次签发期间先以明文 HTTP 提供服务，不阻塞启动。证书存在数据卷里，不需要 sudo 去拷。
 
-**用 compose 而不是 docker run**：仓库里带了编排文件，适合想集中管理配置的人。
-
-```bash
-cd deploy/docker && cp .env.example .env && vi .env
-docker compose up -d
-```
-
-它会拉同一个 GHCR 镜像；拉不到时才降级为本地构建（只凭这一个目录就能构建，不需要 clone 整个仓库）。
-
-**证书**：容器没有证书也能起来，只是降级成"仅明文 HTTP"并在日志里说明 ——
-但 Android 9+ 拒绝明文，所以手机端要等证书就位。80/443 常被运营商封锁，
-只能用 **DNS-01** 验证，两种模式：
-
-- **容器内自动签发续期**（省事，宿主机不用装 acme.sh）—— 加几个环境变量即可：
-
-  ```bash
-  -e CLIPBRIDGE_ACME_DOMAIN=<你的域名> \
-  -e CLIPBRIDGE_ACME_EMAIL=<你的邮箱> \
-  -e CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
-  ```
-
-  容器自己下载 acme.sh、签发、每 12 小时检查续期，证书就绪时热加载 nginx（不断连）。
-  首次签发期间先以明文 HTTP 提供服务，不阻塞启动。
-
-- **宿主机签发再挂进去** —— 把证书装进一个目录，挂到 `/certs`：
-
-  ```bash
-  acme.sh --install-cert -d <域名> --ecc \
-    --fullchain-file <CERT_DIR>/fullchain.pem \
-    --key-file       <CERT_DIR>/privkey.pem \
-    --reloadcmd      "docker exec clipbridge nginx -s reload"
-  ```
-
-  （用 `nginx -s reload` 而不是 `docker restart`：续期时不会断开现有连接。）
+> **为什么默认强制 IPv4**（`CLIPBRIDGE_ACME_IPV4_ONLY=1`）：Docker 默认 bridge 没有 IPv6 出口，
+> 容器解析到 AAAA 后会先试 IPv6 然后挂到超时；而 acme.sh 对 POST 请求**不设响应超时**，
+> 一次丢包就永久卡死（实测 `finalize` 那步挂着数分钟不动，强制 IPv4 后连续 5 次全部成功）。
+> 只有在你确认本机 IPv6 更稳时才设成 0。
 
 > ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
-> 完整说明见 `deploy/docker/.env.example` 与 `docs/开发指南.md`。
+> `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。
 
-**本机直接跑**（开发调试用，需 Go 1.22+）：
+两种模式都没有证书时容器不会崩，会降级为"仅明文 HTTP"并在日志里说明 ——
+但 Android 9+ 拒绝明文，所以手机端要等证书就位。
+
+或本机直接跑（需 Go 1.22+）：
 
 ```bash
-cd server && go run ./cmd/clipbridge -config config.example.yaml
+cd server
+go run ./cmd/clipbridge -config config.example.yaml
 ```
 
-### ② 装客户端
+### 客户端
 
 - **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.11-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
@@ -135,19 +95,6 @@ cd server && go run ./cmd/clipbridge -config config.example.yaml
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
-
-### ③ 配对
-
-1. 两端都填服务端地址 `https://<域名>:8443`；
-2. 填入服务端日志里打印的**配对码**（8 位，有效期内可多台设备复用）；
-3. Android 端额外两步（必须做，否则上行不同步）：
-   - 开启**无障碍服务**（系统设置 → 无障碍 → ClipBridge）
-   - 截图同步需要在 App 内单独打开并授予相册读取权限
-
-完事。之后在 Windows 上复制文字或截图，Android 剪贴板立刻就有；反过来也一样。
-
-> **验证**：复制一段文字，切到手机任意输入框直接粘贴。Android 端是静默写入，
-> **不会弹任何通知** —— 这是预期行为，不是没收到。
 
 > 完整的环境搭建、部署、排障见 `docs/开发指南.md`。
 
@@ -779,7 +726,12 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 | `clipbridge-windows-0.0.11-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
-**Docker 部署不需要下载二进制** —— 直接从 GHCR 拉镜像即可，见上面[快速开始](#快速开始)的 `docker run`。
+**Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
+
+```bash
+cd deploy/docker && cp .env.example .env && vi .env
+docker compose up -d --build
+```
 
 ---
 
