@@ -12,7 +12,7 @@ server:
   listen: "127.0.0.1:18080"
   # 对外访问基地址。用于拼接图片下载 URL，必须改成实际能访问到的地址。
   # 家庭宽带 80/443 被封锁，所以带端口号；少写端口客户端会拿到打不开的图片地址。
-  # 例如：https://nas.hemu.ink:8443
+  # 例如：https://nas.example.com:8443
   # 局域网直连：http://192.168.1.10:8080
   # （通常由 .env 里的 CLIPBRIDGE_PUBLIC_BASE_URL 覆盖，此处只作兜底。）
   public_base_url: "http://127.0.0.1:8080"

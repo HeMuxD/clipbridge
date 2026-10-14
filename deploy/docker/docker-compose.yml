@@ -24,7 +24,7 @@
 # 证书：
 #   Nginx 在容器内读 /certs/fullchain.pem 与 /certs/privkey.pem。
 #   用 acme.sh 的 DNS-01 签发后，把证书装进 CLIPBRIDGE_CERT_DIR 指向的目录即可：
-#     acme.sh --install-cert -d nas.hemu.ink --ecc \
+#     acme.sh --install-cert -d nas.example.com --ecc \
 #       --fullchain-file <CERT_DIR>/fullchain.pem \
 #       --key-file       <CERT_DIR>/privkey.pem \
 #       --reloadcmd      "docker exec clipbridge nginx -s reload"
