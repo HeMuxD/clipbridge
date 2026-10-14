@@ -751,12 +751,9 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 | `clipbridge-windows-0.0.11-x64.zip` | Windows 10/11 x64 | 桌面客户端，解压后直接运行（单文件 exe，自带 .NET 8 运行时） |
 | `SHA256SUMS.txt` | — | 上述文件的 SHA-256 校验和 |
 
-**Docker 部署不需要下载二进制** —— 镜像里已包含服务端与 Nginx：
-
-```bash
-cd deploy/docker && cp .env.example .env && vi .env
-docker compose up -d --build
-```
+**Docker 部署不需要下载二进制** —— 镜像已发布在 GHCR 上（公开，`amd64` + `arm64`）：
+`ghcr.io/hemuxd/clipbridge:0.0.11`。用一条 `docker run` 拉取运行即可，
+完整步骤（配置项、证书）见上面的[快速开始](#快速开始)。
 
 ---
 
