@@ -48,13 +48,11 @@ CLIPBRIDGE_ACME_EMAIL=you@example.com
 # Cloudflare API Token，权限只要 Zone → DNS → Edit
 CF_Token=CHANGE_ME
 
-# ============ 可选 ============
+# ============ 配对码 ============
 
-# 固定配对码：填了永久有效、多台设备共用同一个；留空则每次启动随机生成
-#CLIPBRIDGE_PAIR_CODE=12345678
-
-# 配对码位数（默认 8）
-#CLIPBRIDGE_PAIR_CODE_LENGTH=8
+# 自己定一个 8 位数字：多台设备共用同一个，配对时两端都填它。
+# 例如 48217639 —— 别用 12345678 这类连号，服务是对公网开放的。
+CLIPBRIDGE_PAIR_CODE=CHANGE_ME
 ```
 
 **第二步**：起服务：
