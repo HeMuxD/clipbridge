@@ -25,29 +25,28 @@
 **不用 clone 仓库，也不用本地构建**，拉下来直接跑。
 
 **第一步**：把配置写进 `clipbridge.env`（就是个普通的 .env 文件），
-把尖括号里的内容换成你自己的值：
+把里面的示例值（`nas.example.com`、`you@example.com`、`CHANGE_ME`）
+**逐个换成你自己的** —— 它们是占位符不是默认值，留着不改服务会照常启动，
+但证书签不下来、手机端连不上。
 
 ```ini
 # ============ 必填 ============
 
-# 你的域名
-CLIPBRIDGE_SERVER_NAME=<你的域名>
+# 你的域名：把下面几处的 nas.example.com 换掉
+CLIPBRIDGE_SERVER_NAME=nas.example.com
+CLIPBRIDGE_PUBLIC_BASE_URL=https://nas.example.com:8443
 
-# 服务端对外的完整地址，必须带端口
-CLIPBRIDGE_PUBLIC_BASE_URL=https://<你的域名>:8443
-
-# 签名密钥：先执行 openssl rand -hex 32，把输出粘贴到这里。
-# 生成一次后固定不动 —— 留空的话每次重启都会变，所有设备都得重新配对。
-CLIPBRIDGE_JWT_SECRET=<openssl rand -hex 32 的输出>
+# 签名密钥：先运行 openssl rand -hex 32，把输出的那一串粘贴到等号右边
+CLIPBRIDGE_JWT_SECRET=CHANGE_ME
 
 # ============ 证书 ============
 # 不配的话服务端只有明文 HTTP，而 Android 9+ 默认拒绝明文，手机端连不上
 
 # 域名与邮箱，用于申请 Let's Encrypt 证书
-CLIPBRIDGE_ACME_DOMAIN=<你的域名>
-CLIPBRIDGE_ACME_EMAIL=<你的邮箱>
+CLIPBRIDGE_ACME_DOMAIN=nas.example.com
+CLIPBRIDGE_ACME_EMAIL=you@example.com
 # Cloudflare API Token，权限只要 Zone → DNS → Edit
-CF_Token=<Cloudflare API Token>
+CF_Token=CHANGE_ME
 
 # ============ 可选 ============
 
@@ -113,12 +112,12 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 - **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.11-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
-  首次启动会弹出设置窗口，填服务端地址（`https://<域名>:8443`）+ 配对码即可，之后常驻托盘。
+  首次启动会弹出设置窗口，填服务端地址（`https://nas.example.com:8443`）+ 配对码即可，之后常驻托盘。
   自行构建：`cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
   —— 最后那个参数才会把 WPF / VC 原生库也内嵌，得到真正的单文件。
 - **Android**：可直接装 [Releases](../../releases/latest) 里的 `clipbridge-android-0.0.11.apk`；
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
-  装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
+  装好后打开 App → 填服务端地址（`https://nas.example.com:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
 
 > 完整的环境搭建、部署、排障见 `docs/开发指南.md`。
