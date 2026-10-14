@@ -19,63 +19,88 @@
 
 ## 快速开始
 
-### 服务端（Docker 一键，单容器）
+### 服务端（一条 docker run）
 
-镜像里同时包含 **Go 二进制**与 **Nginx**，只需要一个容器、两条挂载。
+镜像已发布在 GHCR 上（**公开，无需登录**，含 `amd64` + `arm64` 双架构）——
+**不用 clone 仓库，也不用本地构建**，拉下来直接跑。
 
-```bash
-cd deploy/docker
-cp .env.example .env
-# 编辑 .env，填三项：
-#   CLIPBRIDGE_SERVER_NAME      → 你的域名
-#   CLIPBRIDGE_PUBLIC_BASE_URL  → https://<域名>:8443  （必须带端口）
-#   CLIPBRIDGE_JWT_SECRET       → openssl rand -hex 32
-docker compose up -d --build
-docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
+**第一步**：把配置写进 `clipbridge.env`（就是个普通的 .env 文件），
+把尖括号里的内容换成你自己的值：
+
+```ini
+# ============ 必填 ============
+
+# 你的域名
+CLIPBRIDGE_SERVER_NAME=<你的域名>
+
+# 服务端对外的完整地址，必须带端口
+CLIPBRIDGE_PUBLIC_BASE_URL=https://<你的域名>:8443
+
+# 签名密钥：先执行 openssl rand -hex 32，把输出粘贴到这里。
+# 生成一次后固定不动 —— 留空的话每次重启都会变，所有设备都得重新配对。
+CLIPBRIDGE_JWT_SECRET=<openssl rand -hex 32 的输出>
+
+# ============ 证书 ============
+# 不配的话服务端只有明文 HTTP，而 Android 9+ 默认拒绝明文，手机端连不上
+
+# 域名与邮箱，用于申请 Let's Encrypt 证书
+CLIPBRIDGE_ACME_DOMAIN=<你的域名>
+CLIPBRIDGE_ACME_EMAIL=<你的邮箱>
+# Cloudflare API Token，权限只要 Zone → DNS → Edit
+CF_Token=<Cloudflare API Token>
+
+# ============ 可选 ============
+
+# 固定配对码：填了永久有效、多台设备共用同一个；留空则每次启动随机生成
+#CLIPBRIDGE_PAIR_CODE=12345678
+
+# 配对码位数（默认 8）
+#CLIPBRIDGE_PAIR_CODE_LENGTH=8
 ```
 
-> **构建卡在 `apk add` 不动？** 基础镜像的 apk 源默认是 `dl-cdn.alpinelinux.org`，国内会挂住。
-> 现在 Dockerfile 默认换成阿里云（`CLIPBRIDGE_ALPINE_MIRROR` 可覆盖），海外环境设成
-> `https://dl-cdn.alpinelinux.org/alpine` 即可。
+**第二步**：起服务：
+
+```bash
+docker run -d --name clipbridge \
+  --restart unless-stopped \
+  -p 8443:8443 \
+  --env-file clipbridge.env \
+  -v clipbridge-data:/var/lib/clipbridge \
+  ghcr.io/hemuxd/clipbridge:0.0.11
+
+docker logs -f clipbridge     # 配对码打印在这里（多台设备可复用同一个）
+```
+
+镜像里同时包含 **Go 二进制**与 **Nginx**，一个容器搞定，没有额外依赖。
+
+> ⚠️ `clipbridge.env` 里有 `CF_Token`（等价于"能改你域名解析"的权限）和 `JWT_SECRET`，
+> **别提交到版本库**。
+
+> `#` 注释需要 Docker 25+（2024 年 1 月起支持）；更老的版本请先删掉注释行再用 `--env-file`。
 
 **端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
-`.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
-注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
+改端口时 `-p` 与 `CLIPBRIDGE_PUBLIC_BASE_URL` 里的端口号要同步改 ——
+后者是客户端拿图片地址的前缀，不改的话图片打不开。
 
-**证书**：80/443 被封，只能用 **DNS-01** 验证。两种模式，默认是 A。
+**换版本**：把镜像 tag `0.0.11` 换成目标版本即可（GHCR 上目前有 `0.0.11` 与 `sha-<提交>` 两类标签）。
 
-**A) 容器外签发**：把宿主机上 acme.sh 签好的证书装进 `CLIPBRIDGE_CERT_DIR` 指向的目录：
-
-```bash
-acme.sh --install-cert -d <域名> --ecc \
-  --fullchain-file <CERT_DIR>/fullchain.pem \
-  --key-file       <CERT_DIR>/privkey.pem \
-  --reloadcmd      "docker exec clipbridge nginx -s reload"
-```
-
-（用 `nginx -s reload` 而不是 `docker restart`：续期时不会断开现有连接。）
-
-**B) 容器内自动签发与续期**：宿主机上什么都不用装，在 `.env` 里加一行即可——
+**证书的另一种给法**：如果你已经用 acme.sh 在宿主机签好了证书，可以不开容器内 ACME ——
+在上面那条 `docker run` 里加一个挂载，并把 `clipbridge.env` 里那三项 ACME 变量删掉：
 
 ```bash
-CLIPBRIDGE_ACME_DOMAIN=nas.hemu.ink
-CLIPBRIDGE_ACME_EMAIL=admin@example.com
-CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
+-v /path/to/certs:/certs:ro     # 容器读 /certs/fullchain.pem 与 /certs/privkey.pem
 ```
 
-容器会自己下载 acme.sh、签发、每 12 小时检查续期，并在证书就绪时热加载 nginx；
-首次签发期间先以明文 HTTP 提供服务，不阻塞启动。证书存在数据卷里，不需要 sudo 去拷。
+续期后让 nginx 热加载即可：`docker exec clipbridge nginx -s reload`
+（不要用 `docker restart` —— 会断开现有连接）。
 
-> **为什么默认强制 IPv4**（`CLIPBRIDGE_ACME_IPV4_ONLY=1`）：Docker 默认 bridge 没有 IPv6 出口，
-> 容器解析到 AAAA 后会先试 IPv6 然后挂到超时；而 acme.sh 对 POST 请求**不设响应超时**，
-> 一次丢包就永久卡死（实测 `finalize` 那步挂着数分钟不动，强制 IPv4 后连续 5 次全部成功）。
+> **为什么容器内 ACME 默认强制 IPv4**（`CLIPBRIDGE_ACME_IPV4_ONLY=1`）：
+> Docker 默认 bridge 没有 IPv6 出口，容器解析到 AAAA 后会先试 IPv6 然后挂到超时；
+> 而 acme.sh 对 POST 请求**不设响应超时**，一次丢包就永久卡死
+> （实测 `finalize` 那步挂着数分钟不动，强制 IPv4 后连续 5 次全部成功）。
 > 只有在你确认本机 IPv6 更稳时才设成 0。
 
-> ⚠️ `CF_Token` 等价于"能改你域名解析"的权限，**不要提交到版本库**。
-> `.env` 与 `acme-credentials` 都已在 `.gitignore` 里，推送前 grep 一次更稳妥。
-
-两种模式都没有证书时容器不会崩，会降级为"仅明文 HTTP"并在日志里说明 ——
-但 Android 9+ 拒绝明文，所以手机端要等证书就位。
+> 想用 compose 集中管理配置？仓库里也带了编排文件（`deploy/docker/`），拉的是同一个镜像。
 
 或本机直接跑（需 Go 1.22+）：
 
