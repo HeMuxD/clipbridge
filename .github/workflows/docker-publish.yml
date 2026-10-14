@@ -111,21 +111,32 @@ jobs:
             exit 1
           fi
 
-          TAGS="${IMAGE_TAG}"
+          # 镜像全名。必须带 registry 前缀（ghcr.io/...）：
+          # buildx 对不带 registry 的裸 tag 一律按 Docker Hub 处理，
+          # 会去 auth.docker.io 要 library/<tag> 的 token，结果是
+          # 401 access token has insufficient scopes。
+          # 而 GHCR 用的是登录步骤拿到的 GITHUB_TOKEN，两边凭证不通。
+          IMAGE_REF="${REGISTRY}/${IMAGE_NAME}"
+
+          # 每个 tag 都拼上完整镜像名。buildx 的 tags: 接受换行或逗号分隔，
+          # 每一项都必须是 <registry>/<repo>:<tag> 或 <registry>/<repo>@<digest>。
+          TAGS="${IMAGE_REF}:${IMAGE_TAG}"
           # sha 标签用于排查"用户跑的到底是哪次提交"，出问题时很有用
-          TAGS="${TAGS},sha-$(git rev-parse --short=12 HEAD)"
+          TAGS="${TAGS},${IMAGE_REF}:sha-$(git rev-parse --short=12 HEAD)"
 
           # latest 只在正式版打。带连字符的（v0.0.12-rc1、-beta）视为预发布，不覆盖 latest，
           # 否则一个测试版就会把所有人的 latest 顶掉。
           # workflow_dispatch 没有 tag，GITHUB_REF_NAME 是分支名，同样不该动 latest。
           if [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            TAGS="${TAGS},latest"
+            TAGS="${TAGS},${IMAGE_REF}:latest"
           fi
 
-          echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}"  >> "$GITHUB_OUTPUT"
-          echo "tags=${TAGS}"            >> "$GITHUB_OUTPUT"
-          echo "将发布: ${REGISTRY}/${IMAGE_NAME} → ${TAGS//,/$'\n'  }"
+          echo "version=${APP_VERSION}"   >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"   >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REF}"   >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}"             >> "$GITHUB_OUTPUT"
+          echo "将发布:"
+          echo "${TAGS//,/$'\n'  }"
           echo "服务端版本号（写入 healthz）: ${APP_VERSION}"
 
       # ---- 构建并推送 ----
