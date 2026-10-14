@@ -1,0 +1,23 @@
+# 本地兜底构建的排除清单（context 根 = 本目录 deploy/docker/）
+#
+# 仓库根还有一份 .dockerignore，管的是 context 为仓库根的那种构建（Dockerfile）。
+# 本文件只管 compose 的 build.context: . 这种场景（Dockerfile.user）。
+#
+# 虽然 Dockerfile.user 只 COPY 指定的几个文件，context 里多几个小文件不会进镜像，
+# 但下面这几类含私钥/凭据，一旦被误加进 context 就有随 tar 包外泄的风险，
+# 所以显式排掉。
+
+# 本地凭据与证书：含私钥，绝不进构建上下文
+.env
+acme-credentials
+certs/
+*.pem
+*.key
+
+# 本地构建产物
+image/
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+*~

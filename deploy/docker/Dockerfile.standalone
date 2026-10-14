@@ -1,0 +1,133 @@
+# ClipBridge 服务端镜像（用户本地构建版）
+#
+# 这个 Dockerfile 与同目录的 Dockerfile 用途不同，不要混用：
+#
+#   Dockerfile            → 开发者 / CI 用。context 是仓库根，靠 COPY server/ 拿源码。
+#                           改服务端代码时用它。
+#   本文件（.standalone） → 用户本地兜底构建用。context 只要 deploy/docker/ 这一个目录，
+#                           源码由本文件自己从 GitHub 下载。
+#
+# 为什么需要它：compose 默认从 GHCR 拉镜像，拉不到时（网络问题、镜像还没发、
+# 想改代码）会自动降级到本地构建。如果那时还要求用户 clone 整个仓库，
+# "拉镜像省事"的意义就没了 —— 所以这里做到只凭这一个目录就能构建。
+#
+# 注意文件名不能改成 *.user：.gitignore 里有 *.user（给 Visual Studio 的
+# .csproj.user 用），改那个名字会被一起忽略掉、提交不上来。
+#
+# 构建：
+#   docker build -f Dockerfile.standalone -t clipbridge:0.0.11 .
+#
+#   # 国内下载源码慢时指定镜像源：
+#   docker build -f Dockerfile.standalone \
+#     --build-arg CLIPBRIDGE_SOURCE_URL=https://ghproxy.net/https://github.com/HeMuxD/clipbridge/archive/refs/tags/v0.0.11.tar.gz \
+#     -t clipbridge:0.0.11 .
+
+ARG GOLANG_IMAGE=docker.m.daocloud.io/library/golang:1.22-alpine
+ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
+
+# Alpine 软件包源。apk 默认走 dl-cdn.alpinelinux.org，国内实测会长时间挂住。
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+
+# 源码下载地址。留空则按版本号自动拼官方 tarball；国内慢就换成镜像，例如：
+#   https://ghproxy.net/https://github.com/HeMuxD/clipbridge/archive/refs/tags/v0.0.11.tar.gz
+# 用 compose 时对应 .env 的 CLIPBRIDGE_SOURCE_URL。
+ARG CLIPBRIDGE_SOURCE_URL=
+
+# ---------- 阶段 1：下载源码并编译 ----------
+FROM ${GOLANG_IMAGE} AS builder
+
+# 国内构建环境走镜像代理，避免拉不到依赖
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY} \
+    CGO_ENABLED=0
+
+WORKDIR /build
+
+ARG CLIPBRIDGE_SOURCE_URL
+ARG VERSION=0.0.11
+
+# 没显式指定下载地址时，按版本号拼出官方 tarball 地址。
+# 版本号可能带 -image / -rc1 这类后缀（那是镜像 tag），但 Git tag 一定是 vX.Y.Z，
+# 所以只取前三段数字，避免下错包。
+GIT_TAG="v$(echo "${VERSION}" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')"
+SRC_URL="${CLIPBRIDGE_SOURCE_URL:-https://github.com/HeMuxD/clipbridge/archive/refs/tags/${GIT_TAG}.tar.gz}"
+
+# 下载并解压。GitHub 的 tarball 解出来是 clipbridge-<版本>/ 这一层目录，
+# 用 --strip-components=1 去掉它，让 server/ 直接落在 /build/server。
+#
+# 解压后立即校验 server/go.mod 是否存在：下载失败或地址下错包时，
+# 在这里就明确报错，而不是等到 go build 才吐一堆看不懂的信息。
+RUN set -eux; \
+    echo "下载源码: ${SRC_URL}"; \
+    wget -q -O /tmp/src.tar.gz "${SRC_URL}"; \
+    test -s /tmp/src.tar.gz || { echo "错误: 下载到的文件是空的，请检查 CLIPBRIDGE_SOURCE_URL"; exit 1; }; \
+    mkdir -p /build; \
+    tar -xzf /tmp/src.tar.gz -C /build --strip-components=1; \
+    test -f /build/server/go.mod || { echo "错误: 解压后未找到 server/go.mod，源码包结构不对"; exit 1; }; \
+    echo "源码就绪:"; ls /build
+
+# 先只放 go.mod/go.sum，让依赖层可以被缓存复用；改版本号不会重新拉依赖
+WORKDIR /build/server
+RUN go mod download
+
+# -trimpath + -s -w：去掉绝对路径与调试符号，得到体积小、可移植的静态二进制
+# 版本号注入到 internal/buildinfo.Version（服务端 -version 与 /healthz 都读它）
+RUN go build \
+        -trimpath \
+        -ldflags="-s -w -X github.com/clipbridge/server/internal/buildinfo.Version=${VERSION}" \
+        -o /build/clipbridge \
+        ./cmd/clipbridge
+
+# ---------- 阶段 2：Nginx + Go 二进制 ----------
+FROM ${NGINX_IMAGE}
+
+# 在 FROM 之前声明的 ARG 属于全局作用域，阶段内使用必须重新声明一次
+# （不带默认值 = 继承全局默认值），否则这里会拿到空字符串。
+ARG ALPINE_MIRROR
+
+# 运行阶段除 nginx + Go 二进制外，还带 curl / openssl / bash ——
+# 三者都是"容器内自动签发证书"（可选功能，见 entrypoint.sh 的 ACME 段）需要的：
+#   curl/openssl  acme.sh 用它们做 HTTPS 请求与密钥生成
+#   bash          acme.sh 在 busybox ash 下偶有兼容问题，装 bash 一劳永逸
+# 不用这个功能的话它们只是多占几 MB，不影响任何行为。
+#
+# 先把 apk 源换掉再装：基础镜像里的 /etc/apk/repositories 指向 dl-cdn，
+# 不换的话这一步在国内可能永久挂住。
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+        sed -i -e "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" \
+               -e "s|http://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" \
+        /etc/apk/repositories; \
+    fi \
+ && apk add --no-cache ca-certificates tzdata wget curl openssl bash
+
+WORKDIR /opt/clipbridge
+
+# 服务端二进制与建表 SQL（来自上面下载的源码包）
+COPY --from=builder /build/clipbridge /opt/clipbridge/clipbridge
+COPY --from=builder /build/server/migrations /opt/clipbridge/migrations
+COPY --from=builder /build/server/config.example.yaml /opt/clipbridge/config.yaml
+
+# nginx 配置模板与 entrypoint 来自本目录（context 就是这里，无需下载）
+COPY nginx.http.conf.template /opt/clipbridge/
+COPY nginx.https.conf.template /opt/clipbridge/
+COPY entrypoint.sh /opt/clipbridge/entrypoint.sh
+RUN chmod +x /opt/clipbridge/entrypoint.sh
+
+# 内置服务端只监听容器内的回环地址，外部一律经 nginx 进入
+ENV CLIPBRIDGE_LISTEN=127.0.0.1:18080 \
+    CLIPBRIDGE_DB_PATH=/var/lib/clipbridge/clipbridge.db \
+    CLIPBRIDGE_FILE_DIR=/var/lib/clipbridge/files
+
+RUN mkdir -p /var/lib/clipbridge/files /certs
+
+# 8443 = HTTPS（对外主端口，避开被封的 443）
+# 8080 = 明文 HTTP（局域网调试用）
+EXPOSE 8443 8080
+
+VOLUME ["/var/lib/clipbridge"]
+
+# 直接探 Go 进程：nginx 起来但后端挂了，也应该判为不健康
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:18080/healthz || exit 1
+
+ENTRYPOINT ["/opt/clipbridge/entrypoint.sh"]
