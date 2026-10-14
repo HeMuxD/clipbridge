@@ -23,14 +23,11 @@ ClipBridge 是**跨网络**同步的 —— 公司和家里、手机和电脑，
 
 | 前提 | 说明 |
 | --- | --- |
-| **公网 IP 或 DDNS** | 服务端必须能被外网访问到。家庭宽带动态 IP 用 DDNS（如 `nas.hemu.ink`）；飞牛 NAS / 群晖自带 FN Connect、QuickConnect，或自己配 acme.sh + Cloudflare |
-| **一个域名** | 必须。TLS 证书要签发到域名上，而 Android 9+ 强制 HTTPS，用 IP 直连拿不到证书 |
+| **公网 IP 或 DDNS** | 服务端必须能被外网访问到。家庭宽带动态 IP 就用 DDNS |
+| **一个域名** | TLS 证书要签发到域名上，而 Android 9+ 强制 HTTPS，用 IP 直连拿不到证书 |
 
 > 运营商通常封锁家庭宽带的 80 / 443 端口，所以 ClipBridge 对外统一用 **8443**，
 > 证书走 **DNS-01** 验证（不占用被封的端口）。
-
-**只想先试试?** 可以把服务端跑在局域网内、两端都填 `http://<内网IP>:8080` 联调，
-但 Android 9+ 默认拒绝明文，需要单独关它的 cleartext 限制 —— 只建议临时排障用，不是正经用法。
 
 ---
 
@@ -51,8 +48,8 @@ cp .env.example .env
 
 | 变量 | 说明 |
 | --- | --- |
-| `CLIPBRIDGE_SERVER_NAME` | 你的域名，如 `nas.hemu.ink` |
-| `CLIPBRIDGE_PUBLIC_BASE_URL` | `https://nas.hemu.ink:8443`，**必须带端口** |
+| `CLIPBRIDGE_SERVER_NAME` | 你的域名 |
+| `CLIPBRIDGE_PUBLIC_BASE_URL` | `https://<你的域名>:8443`，**必须带端口** |
 | `CLIPBRIDGE_JWT_SECRET` | `openssl rand -hex 32` 生成，写死后重启不必重新配对 |
 
 ```bash
@@ -99,8 +96,8 @@ acme.sh --install-cert -d <域名> --ecc \
 **B) 容器内自动签发与续期**：宿主机上什么都不用装，在 `.env` 里加一行即可——
 
 ```bash
-CLIPBRIDGE_ACME_DOMAIN=nas.hemu.ink
-CLIPBRIDGE_ACME_EMAIL=admin@example.com
+CLIPBRIDGE_ACME_DOMAIN=<你的域名>
+CLIPBRIDGE_ACME_EMAIL=<你的邮箱>
 CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
 ```
 
