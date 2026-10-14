@@ -153,14 +153,18 @@ jobs:
           provenance: false
           sbom: false
 
+          # ⚠️ build-args 是多行块标量，一行一个 arg，行尾不能带注释 ——
+          #    带注释会和下一行拼成同一个 arg（VERSION=xxx # 说明...），
+          #    版本号就脏了。说明写在上面。
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}            # 以下三个按 Dockerfile / compose 注释里"海外环境"的那一套来：
-            # Actions runner 在海外，直连官方源最稳，也不依赖第三方镜像站的可用性。
-            # 换成阿里云镜像站也能用，但那是为国内构建环境准备的。
+            VERSION=${{ steps.meta.outputs.version }}
             GOLANG_IMAGE=golang:1.22-alpine
             NGINX_IMAGE=nginx:1.27-alpine
             GOPROXY=https://proxy.golang.org,direct
             ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
+          # 上面三个镜像源/代理按 Dockerfile 注释里"海外环境"的那一套来：
+          # Actions runner 在海外，直连官方源最稳，也不依赖第三方镜像站的可用性。
+          # 换成阿里云镜像站也能用，但那是为国内构建环境准备的。
 
       # ---- 推送后验证 ----
       # 这个项目踩过"镜像能构建但容器起不来"的一类问题（证书缺失时 nginx 起不来、
