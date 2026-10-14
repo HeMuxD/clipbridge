@@ -13,6 +13,8 @@
 
 **当前版本 v0.0.11** — [本版改动](CHANGELOG.md#v0011-改动内容) · [下载产物](../../releases/latest)
 
+**中文** | [English](README.en.md)
+
 </div>
 
 ---
