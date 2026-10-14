@@ -1,0 +1,254 @@
+# ClipBridge 服务端镜像自动发布到 GHCR
+#
+# 触发方式：打 tag 推送
+#   git tag v0.0.12 && git push origin v0.0.12
+# 产物：ghcr.io/hemuxd/clipbridge:0.0.12 、:latest 、:sha-<commit>
+#
+# 为什么值得做：目标用户是"自建 NAS + 家庭宽带"，而 deploy/docker 的本地构建
+# 对他们是最容易翻车的一步 —— apk 源卡在 dl-cdn、Go 代理拉不到依赖、
+# NAS 上没有构建工具链、DOCKER_CONFIG 还得手动指定。发镜像后这些全部消失，
+# 用户只需要拉一个 30~50MB 的镜像。
+#
+# 手动跑一次验证流程（不推 latest，只推指定版本号 + sha 标签）：
+#   Actions → Docker Publish → Run workflow → 填 0.0.12
+
+name: Docker Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，不带 v 前缀（例如 0.0.12）。留空则用 Dockerfile 里的默认值。'
+        required: false
+        default: ''
+
+# GHCR 推送只需要两个权限。注意不要给 write-all 之类的宽权限。
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR 强制要求镜像路径全小写，所以是 hemuxd 而不是 HeMuxD
+  IMAGE_NAME: hemuxd/clipbridge
+
+  # 目标架构。linux/arm64 不是可选项：飞牛 NAS 等 ARM 机型只发 amd64 的话，
+  # 用户拉下来会直接报 exec format error，而这个报错很难自己查到根因。
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU + Buildx：多架构构建的前提。
+      # arm64 是模拟执行的，Go 这种小项目编译会慢几分钟，属正常。
+      # （仓库是公开的话，也可以改用原生 arm64 runner 省掉 QEMU，见文件末尾说明）
+      - name: 安装 QEMU 与 Buildx
+        uses: docker/setup-qemu-action@v3
+      - name: 安装 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # Actions 内置 token，无需自己建 secret
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- 版本号与标签 ----
+      # tag 形如 v0.0.12 → 版本号 0.0.12，通过 build-arg 注入，
+      # 服务端的 -version 与 /healthz 读的是同一个值（internal/buildinfo）。
+      - name: 计算版本号与镜像标签
+        id: meta
+        run: |
+          set -euo pipefail
+
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"     # 去掉 v 前缀
+          fi
+
+          # 校验：空版本号会让构建产物带着默认版本号悄悄发出去，必须拦住
+          if [ -z "$VERSION" ]; then
+            echo "::error::版本号为空。请通过 tag（v1.2.3）或手动输入提供。"
+            exit 1
+          fi
+
+          TAGS="${VERSION}"
+          # sha 标签用于排查"用户跑的到底是哪次提交"，出问题时很有用
+          TAGS="${TAGS},sha-$(git rev-parse --short=12 HEAD)"
+
+          # latest 只在正式版打。带连字符的（v0.0.12-rc1、-beta）视为预发布，不覆盖 latest，
+          # 否则一个测试版就会把所有人的 latest 顶掉。
+          # workflow_dispatch 没有 tag，GITHUB_REF_NAME 是分支名，同样不该动 latest。
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TAGS="${TAGS},latest"
+          fi
+
+          echo "version=${VERSION}"  >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}"        >> "$GITHUB_OUTPUT"
+          echo "将发布: ${REGISTRY}/${IMAGE_NAME} → ${TAGS//,/$'\n'  }"
+
+      # ---- 构建并推送 ----
+      - name: 构建并推送镜像
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          # 构建上下文必须是仓库根目录：Dockerfile 里 COPY server/ 是相对根目录的
+          context: .
+          file: deploy/docker/Dockerfile
+
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+          # 依赖层缓存。没这一步每次发版都要重新 go mod download + 重编依赖，
+          # 多架构下尤其明显。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+          # 关闭 provenance / SBOM 附加清单。
+          # buildx 默认会往 manifest 里塞一个 attestation 层，部分 NAS 上的
+          # 旧版 Docker（20.x）拉取时会失败或显示异常的镜像体积。受众是自建 NAS，
+          # 稳妥优先。
+          provenance: false
+          sbom: false
+
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            # 以下三个按 Dockerfile / compose 注释里"海外环境"的那一套来：
+            # Actions runner 在海外，直连官方源最稳，也不依赖第三方镜像站的可用性。
+            # 换成阿里云镜像站也能用，但那是为国内构建环境准备的。
+            GOLANG_IMAGE=golang:1.22-alpine
+            NGINX_IMAGE=nginx:1.27-alpine
+            GOPROXY=https://proxy.golang.org,direct
+            ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
+
+      # ---- 推送后验证 ----
+      # 这个项目踩过"镜像能构建但容器起不来"的一类问题（证书缺失时 nginx 起不来、
+      # 配置被 Docker 建成目录等）。构建成功不等于能跑，所以拉回来真起一次。
+      - name: 拉取镜像（按 digest）
+        id: pull
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+          # 刚推完可能有极短的同步延迟，重试几次再判失败
+          for i in 1 2 3 4 5; do
+            if docker pull "$IMAGE"; then
+              echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "第 $i 次拉取失败，5 秒后重试…"
+            sleep 5
+          done
+
+          echo "::error::推送后无法拉取镜像：$IMAGE"
+          exit 1
+
+      - name: 启动容器并检查健康状态
+        id: smoke
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.pull.outputs.image }}"
+
+          docker run -d --name clipbridge-smoke \
+            -e CLIPBRIDGE_SERVER_NAME=smoke.invalid \
+            -e CLIPBRIDGE_PUBLIC_BASE_URL=https://smoke.invalid:8443 \
+            -e CLIPBRIDGE_JWT_SECRET=0123456789abcdef0123456789abcdef \
+            -p 18443:8443 -p 18080:8080 \
+            "$IMAGE"
+
+          # 1) Go 进程自身：容器内回环地址，最可靠的一条
+          echo "==> 等待服务端就绪"
+          for i in $(seq 1 40); do
+            if docker exec clipbridge-smoke \
+                 wget -qO- http://127.0.0.1:18080/healthz 2>/dev/null; then
+              echo; break
+            fi
+            if [ "$i" = "40" ]; then
+              echo "::error::服务端 40 秒内未就绪"
+              docker logs clipbridge-smoke || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # 2) 顺带校验版本号真的注入进去了（ldflags 写错时这里会发现）
+          HEALTH="$(docker exec clipbridge-smoke wget -qO- http://127.0.0.1:18080/healthz)"
+          echo "healthz: $HEALTH"
+          EXPECTED="${{ steps.meta.outputs.version }}"
+          if [[ "$HEALTH" != *"\"$EXPECTED\""* ]]; then
+            echo "::error::healthz 里的版本号与预期不符（期望 $EXPECTED）"
+            exit 1
+          fi
+
+          # 3) 从宿主机经映射端口走一遍，验证 nginx 也在正常工作。
+          #    没有证书时容器降级为明文 HTTP，按 Dockerfile 的 EXPOSE 两个口都试一下。
+          echo "==> 经宿主机端口检查 nginx"
+          OK=""
+          for port in 18443 18080; do
+            for i in $(seq 1 15); do
+              if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+                echo "nginx 响应正常（宿主机端口 $port）"
+                OK="$port"
+                break 2
+              fi
+              sleep 1
+            done
+          done
+          if [ -z "$OK" ]; then
+            echo "::error::宿主机端口无法访问，nginx 可能未正常启动"
+            docker logs clipbridge-smoke || true
+            exit 1
+          fi
+
+          echo "冒烟测试通过"
+
+      - name: 清理冒烟容器
+        if: always()
+        run: docker rm -f clipbridge-smoke || true
+
+      - name: 输出摘要
+        if: always()
+        run: |
+          {
+            echo "### 镜像已发布"
+            echo ""
+            echo '```'
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+            echo '```'
+            echo ""
+            echo "- 版本号：\`${{ steps.meta.outputs.version }}\`"
+            echo "- 架构：\`${{ env.PLATFORMS }}\`"
+            echo "- digest：\`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+# ---------------------------------------------------------------------------
+# 可选优化（当前没做，需要时再加）：
+#
+# 1) 用原生 arm64 runner 替掉 QEMU，arm64 构建能从几分钟降到几十秒。
+#    仅公开仓库免费。做法是加第二个 job：
+#       build-arm64:
+#         runs-on: ubuntu-24.04-arm
+#    然后用 docker/build-push-action 分别构建、最后用
+#    docker buildx imagetools create 合并 manifest。会比现在复杂不少，
+#    建议等用户量上来、发版开始嫌慢再上。
+#
+# 2) 在 Pull Request 上也跑一次构建（push: false），提前发现 Dockerfile 被改坏。
+#    注意：fork 来的 PR 拿不到 packages:write，cache-to 会失败，
+#    需要把 cache-to 改成条件启用。当前未加，避免引入这种边界情况。
+#
+# 3) 镜像同步到国内站（阿里云 ACR 等）。等有人反馈 GHCR 国内拉取慢再加，
+#    一上来就维护两个站不划算。
+# ---------------------------------------------------------------------------
