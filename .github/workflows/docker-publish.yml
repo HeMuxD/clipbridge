@@ -1,13 +1,20 @@
 # ClipBridge 服务端镜像自动发布到 GHCR
 #
 # 触发方式：打 tag 推送
-#   git tag v0.0.12 && git push origin v0.0.12
-# 产物：ghcr.io/hemuxd/clipbridge:0.0.12 、:latest 、:sha-<commit>
+#   git tag v0.0.12 && git push origin v0.0.12        # 正式版，同时打 latest
+#   git tag v0.0.11-image && git push origin ...      # CI 专用，不打 latest
+#
+# 产物：ghcr.io/hemuxd/clipbridge:<tag> 与 :sha-<commit>
 #
 # 为什么值得做：目标用户是"自建 NAS + 家庭宽带"，而 deploy/docker 的本地构建
 # 对他们是最容易翻车的一步 —— apk 源卡在 dl-cdn、Go 代理拉不到依赖、
 # NAS 上没有构建工具链、DOCKER_CONFIG 还得手动指定。发镜像后这些全部消失，
 # 用户只需要拉一个 30~50MB 的镜像。
+#
+# 「镜像 tag」与「服务端版本号」是两回事，见下面 meta 步骤里的说明。
+# 例如 v0.0.11-image：镜像 tag 是 0.0.11-image，但写入 /healthz 的是 0.0.11
+# —— 因为源码版本确实还是 0.0.11，只是多打了一个容器镜像。
+# 这种带后缀的 tag 不会覆盖 latest。
 #
 # 手动跑一次验证流程（不推 latest，只推指定版本号 + sha 标签）：
 #   Actions → Docker Publish → Run workflow → 填 0.0.12
@@ -83,7 +90,28 @@ jobs:
             exit 1
           fi
 
-          TAGS="${VERSION}"
+          # ---- 分离「镜像 tag」与「服务端版本号」----
+          #
+          # 两者不是一回事。tag 形如 v0.0.11-image、v0.0.12-rc1 时，
+          # 整个字符串（去掉 v）是合法的 Docker tag，但它不是一个合法的语义化版本号，
+          # 不能直接塞进 -X buildinfo.Version —— 否则 /healthz 会返回
+          # "version":"0.0.11-image"，客户端解析版本号的地方会拿到脏数据。
+          #
+          # 所以：镜像 tag 用完整字符串；注入服务端的只取第一段数字部分。
+          #   v0.0.11-image  → tag 0.0.11-image，服务端版本号 0.0.11
+          #   v0.0.12-rc1    → tag 0.0.12-rc1，  服务端版本号 0.0.12
+          #   v0.0.12        → tag 0.0.12，      服务端版本号 0.0.12
+          IMAGE_TAG="${VERSION}"
+          APP_VERSION="$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')"
+
+          # 取不出三段式版本号就失败。宁可报错也不要发出一个版本号错乱的镜像。
+          if [ -z "$APP_VERSION" ]; then
+            echo "::error::无法从 '${VERSION}' 解析出语义化版本号（形如 1.2.3）。"
+            echo "        请确认 tag 形如 v1.2.3 / v1.2.3-image / v1.2.3-rc1。"
+            exit 1
+          fi
+
+          TAGS="${IMAGE_TAG}"
           # sha 标签用于排查"用户跑的到底是哪次提交"，出问题时很有用
           TAGS="${TAGS},sha-$(git rev-parse --short=12 HEAD)"
 
@@ -94,9 +122,11 @@ jobs:
             TAGS="${TAGS},latest"
           fi
 
-          echo "version=${VERSION}"  >> "$GITHUB_OUTPUT"
-          echo "tags=${TAGS}"        >> "$GITHUB_OUTPUT"
+          echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"  >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}"            >> "$GITHUB_OUTPUT"
           echo "将发布: ${REGISTRY}/${IMAGE_NAME} → ${TAGS//,/$'\n'  }"
+          echo "服务端版本号（写入 healthz）: ${APP_VERSION}"
 
       # ---- 构建并推送 ----
       - name: 构建并推送镜像
@@ -124,8 +154,7 @@ jobs:
           sbom: false
 
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-            # 以下三个按 Dockerfile / compose 注释里"海外环境"的那一套来：
+            VERSION=${{ steps.meta.outputs.version }}            # 以下三个按 Dockerfile / compose 注释里"海外环境"的那一套来：
             # Actions runner 在海外，直连官方源最稳，也不依赖第三方镜像站的可用性。
             # 换成阿里云镜像站也能用，但那是为国内构建环境准备的。
             GOLANG_IMAGE=golang:1.22-alpine
@@ -225,10 +254,11 @@ jobs:
             echo "### 镜像已发布"
             echo ""
             echo '```'
-            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}"
             echo '```'
             echo ""
-            echo "- 版本号：\`${{ steps.meta.outputs.version }}\`"
+            echo "- 镜像 tag：\`${{ steps.meta.outputs.image_tag }}\`"
+            echo "- 服务端版本号：\`${{ steps.meta.outputs.version }}\`（写入 /healthz）"
             echo "- 架构：\`${{ env.PLATFORMS }}\`"
             echo "- digest：\`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
