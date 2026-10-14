@@ -17,29 +17,70 @@
 
 ---
 
+## 开始之前：你需要这两样东西
+
+ClipBridge 是**跨网络**同步的 —— 公司和家里、手机和电脑，走的都是公网。所以它**不是局域网工具**，下面两样是硬性前提，缺一个就跑不通：
+
+| 前提 | 说明 |
+| --- | --- |
+| **公网 IP 或 DDNS** | 服务端必须能被外网访问到。家庭宽带动态 IP 用 DDNS（如 `nas.hemu.ink`）；飞牛 NAS / 群晖自带 FN Connect、QuickConnect，或自己配 acme.sh + Cloudflare |
+| **一个域名** | 必须。TLS 证书要签发到域名上，而 Android 9+ 强制 HTTPS，用 IP 直连拿不到证书 |
+
+> 运营商通常封锁家庭宽带的 80 / 443 端口，所以 ClipBridge 对外统一用 **8443**，
+> 证书走 **DNS-01** 验证（不占用被封的端口）。
+
+**只想先试试?** 可以把服务端跑在局域网内、两端都填 `http://<内网IP>:8080` 联调，
+但 Android 9+ 默认拒绝明文，需要单独关它的 cleartext 限制 —— 只建议临时排障用，不是正经用法。
+
+---
+
 ## 快速开始
 
-### 服务端（Docker 一键，单容器）
+三步跑通：起服务端 → 装客户端 → 配对。
 
-镜像里同时包含 **Go 二进制**与 **Nginx**，只需要一个容器、两条挂载。
+### ① 起服务端（Docker 一键，单容器）
+
+镜像已发布到 GHCR，**不需要装 Go、不需要 clone 仓库、也不用等编译**：
 
 ```bash
 cd deploy/docker
 cp .env.example .env
-# 编辑 .env，填三项：
-#   CLIPBRIDGE_SERVER_NAME      → 你的域名
-#   CLIPBRIDGE_PUBLIC_BASE_URL  → https://<域名>:8443  （必须带端口）
-#   CLIPBRIDGE_JWT_SECRET       → openssl rand -hex 32
-docker compose up -d --build
-docker compose logs -f clipbridge   # 配对码打印在这里（多台设备可复用同一个码）
 ```
 
-> **构建卡在 `apk add` 不动？** 基础镜像的 apk 源默认是 `dl-cdn.alpinelinux.org`，国内会挂住。
-> 现在 Dockerfile 默认换成阿里云（`CLIPBRIDGE_ALPINE_MIRROR` 可覆盖），海外环境设成
-> `https://dl-cdn.alpinelinux.org/alpine` 即可。
+编辑 `.env`，填三项：
 
-**端口**：家庭宽带的 80 / 443 通常被运营商封锁，所以对外统一用 **8443**。
-`.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
+| 变量 | 说明 |
+| --- | --- |
+| `CLIPBRIDGE_SERVER_NAME` | 你的域名，如 `nas.hemu.ink` |
+| `CLIPBRIDGE_PUBLIC_BASE_URL` | `https://nas.hemu.ink:8443`，**必须带端口** |
+| `CLIPBRIDGE_JWT_SECRET` | `openssl rand -hex 32` 生成，写死后重启不必重新配对 |
+
+```bash
+docker compose up -d
+docker compose logs -f clipbridge    # 配对码打印在这里，多台设备可复用同一个码
+```
+
+镜像里同时包含 **Go 二进制**与 **Nginx**，一个容器、两条挂载即可。默认拉取
+`ghcr.io/hemuxd/clipbridge:0.0.11`（**amd64 + arm64 双架构**，NAS 是 ARM 的也能用）。
+换版本改 `.env` 里的 `CLIPBRIDGE_VERSION`，不用动 compose 文件。
+
+> **国内拉取 GHCR 慢**的话，配一个镜像加速器，例如 `/etc/docker/daemon.json`：
+>
+> ```json
+> { "registry-mirrors": ["https://docker.m.daocloud.io"] }
+> ```
+>
+> ```bash
+> sudo systemctl restart docker
+> ```
+>
+> 改完之后 `docker compose up -d` 无需任何变化，拉取会自动走加速器。
+
+> **拉不到镜像时**会自动降级为本地构建（compose 里保留了 `build` 段兜底）。
+> 只凭 `deploy/docker/` 这几个文件就能构建，不需要 clone 整个仓库。
+> 想强制重新拉取：`docker compose up -d --pull always`。
+
+**端口**：`.env` 里的 `CLIPBRIDGE_HTTPS_PORT` 同时决定容器内监听端口与宿主机映射端口，改一处即可。
 注意 `CLIPBRIDGE_PUBLIC_BASE_URL` 必须带上同一个端口号，否则客户端拿到的图片地址打不开。
 
 **证书**：80/443 被封，只能用 **DNS-01** 验证。两种模式，默认是 A。
@@ -80,11 +121,10 @@ CF_Token=<Cloudflare API Token，权限只要 Zone → DNS → Edit>
 或本机直接跑（需 Go 1.22+）：
 
 ```bash
-cd server
-go run ./cmd/clipbridge -config config.example.yaml
+cd server && go run ./cmd/clipbridge -config config.example.yaml
 ```
 
-### 客户端
+### ② 装客户端
 
 - **Windows**：可直接下 [Releases](../../releases/latest) 里的 `clipbridge-windows-0.0.11-x64.zip`，
   解压后双击 `ClipBridge.exe` 启动（**单文件，自带 .NET 8 运行时**，不需要预装任何东西）。
@@ -95,6 +135,19 @@ go run ./cmd/clipbridge -config config.example.yaml
   或自行 `cd clients/android && gradle assembleDebug`，产物在 `app/build/outputs/apk/debug/`。
   装好后打开 App → 填服务端地址（`https://<域名>:8443`）→ 配对 → **开启无障碍服务**，
   之后复制 / 截图即自动同步；截图同步需要在 App 内单独打开并授予相册读取权限。
+
+### ③ 配对
+
+1. 两端都填服务端地址 `https://<域名>:8443`；
+2. 填入服务端日志里打印的**配对码**（8 位，有效期内可多台设备复用）；
+3. Android 端额外两步（必须做，否则上行不同步）：
+   - 开启**无障碍服务**（系统设置 → 无障碍 → ClipBridge）
+   - 截图同步需要在 App 内单独打开并授予相册读取权限
+
+完事。之后在 Windows 上复制文字或截图，Android 剪贴板立刻就有；反过来也一样。
+
+> **验证**：复制一段文字，切到手机任意输入框直接粘贴。Android 端是静默写入，
+> **不会弹任何通知** —— 这是预期行为，不是没收到。
 
 > 完整的环境搭建、部署、排障见 `docs/开发指南.md`。
 
@@ -730,7 +783,7 @@ v0.0.1 是**第一个可用版本**：服务端、Windows / Android 客户端与
 
 ```bash
 cd deploy/docker && cp .env.example .env && vi .env
-docker compose up -d --build
+docker compose up -d          # 从 GHCR 拉镜像，不需要 --build
 ```
 
 ---
