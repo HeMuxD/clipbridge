@@ -4,6 +4,9 @@
 Thumbs.db
 *.log
 
+# ---- 发布产物（构建输出的打包结果，不入库）----
+dist/
+
 # ---- 服务端 ----
 server/dist/
 server/data/

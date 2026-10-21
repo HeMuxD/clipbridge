@@ -11,7 +11,7 @@ Copy text or take a screenshot on any device, and it shows up **automatically an
 
 **Go + WebSocket + SQLite** · **C# / .NET 8** · **Kotlin / Compose**
 
-**Current version v0.0.12** — [What's new](CHANGELOG.md) · [Downloads](../../releases/latest)
+**Current version v0.9.9** — [What's new](CHANGELOG.md) · [Downloads](../../releases/latest)
 
 **English** | [中文](README.md)
 
@@ -84,7 +84,7 @@ docker run -d --name clipbridge \
   -e CF_Token=CHANGE_ME \
   -e CLIPBRIDGE_PAIR_CODE=CHANGE_ME \
   -v clipbridge-data:/var/lib/clipbridge \
-  ghcr.io/hemuxd/clipbridge:0.0.12
+  ghcr.io/hemuxd/clipbridge:0.9.9
 
 docker logs -f clipbridge     # the pair code is printed here (all devices can share it)
 ```
@@ -116,7 +116,7 @@ docker run -d --name clipbridge \
   -p 8443:8443 \
   --env-file clipbridge.env \
   -v clipbridge-data:/var/lib/clipbridge \
-  ghcr.io/hemuxd/clipbridge:0.0.12
+  ghcr.io/hemuxd/clipbridge:0.9.9
 ```
 
 > `#` comments need Docker 25+; on older versions strip the comment lines before using `--env-file`.
@@ -126,7 +126,7 @@ The image bundles the **Go binary** and **Nginx** — one container, no extra de
 
 **Port**: home ISPs often block 80/443, so the default public port is **8443**. If you change it, update both `-p` and the port inside `CLIPBRIDGE_PUBLIC_BASE_URL` — the latter is the prefix for image URLs, so a mismatch breaks image delivery.
 
-**Switching versions**: just change the image tag `0.0.12` (GHCR currently carries `0.0.12` and `sha-<commit>` tags).
+**Switching versions**: just change the image tag `0.9.9` (GHCR currently carries `0.9.9` and `sha-<commit>` tags).
 
 **Alternative certificate setup**: if you already have a certificate signed on the host with acme.sh, you can skip the built-in ACME — add a mount to the `docker run` command above and drop the three ACME settings:
 
@@ -150,9 +150,9 @@ go run ./cmd/clipbridge -config config.example.yaml
 
 ### Clients
 
-- **Windows**: download `clipbridge-windows-0.0.12-x64.zip` from [Releases](../../releases/latest), unzip and double-click `ClipBridge.exe` (**single file, bundles the .NET 8 runtime** — nothing to install first). On first launch a settings window appears: enter the server URL (`https://nas.example.com:8443`) plus the pair code, and it lives in the tray from then on.
+- **Windows**: download `clipbridge-windows-0.9.9-x64.zip` from [Releases](../../releases/latest), unzip and double-click `ClipBridge.exe` (**single file, bundles the .NET 8 runtime** — nothing to install first). On first launch a settings window appears: enter the server URL (`https://nas.example.com:8443`) plus the pair code, and it lives in the tray from then on.
   Build it yourself: `cd clients/windows/src && dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true` — that last flag is what packs the WPF / VC native libraries in, giving you a true single file.
-- **Android**: install `clipbridge-android-0.0.12.apk` from [Releases](../../releases/latest); or build with `cd clients/android && gradle assembleDebug` (output in `app/build/outputs/apk/debug/`). Then open the app → enter the server URL (`https://nas.example.com:8443`) → pair → **enable the accessibility service**. Copying and screenshots then sync automatically; screenshot sync needs to be turned on separately in the app and granted photo access.
+- **Android**: install `clipbridge-android-0.9.9.apk` from [Releases](../../releases/latest); or build with `cd clients/android && gradle assembleDebug` (output in `app/build/outputs/apk/debug/`). Then open the app → enter the server URL (`https://nas.example.com:8443`) → pair → **enable the accessibility service**. Copying and screenshots then sync automatically; screenshot sync needs to be turned on separately in the app and granted photo access.
 
 > Full environment setup, deployment and troubleshooting: see `docs/开发指南.md` (Chinese).
 
@@ -309,20 +309,20 @@ Syncing does not mean "push whatever is in the clipboard" — it means **sync th
 
 ## Version and downloads
 
-**Current version v0.0.12** (2026-10-21). Full change history: **[CHANGELOG.md](CHANGELOG.md)** (Chinese).
+**Current version v0.9.9** (2026-10-21). Full change history: **[CHANGELOG.md](CHANGELOG.md)** (Chinese).
 
 Artifacts are on the [Releases page](../../releases/latest):
 
 | Artifact | Platform | Notes |
 | --- | --- | --- |
-| `clipbridge-server-0.0.12-linux-amd64.tar.gz` | Linux x86-64 | static binary + sample config + schema SQL + systemd / nginx files |
-| `clipbridge-server-0.0.12-windows-amd64.zip` | Windows x86-64 | same, server binary |
-| `clipbridge-server-0.0.12-darwin-arm64.tar.gz` | macOS Apple Silicon | same |
-| `clipbridge-android-0.0.12.apk` | Android 8.0+ | client package (debug-signed, installs directly) |
-| `clipbridge-windows-0.0.12-x64.zip` | Windows 10/11 x64 | desktop client, unzip and run (single exe, bundles .NET 8) |
+| `clipbridge-server-0.9.9-linux-amd64.tar.gz` | Linux x86-64 | static binary + sample config + schema SQL + systemd / nginx files |
+| `clipbridge-server-0.9.9-windows-amd64.zip` | Windows x86-64 | same, server binary |
+| `clipbridge-server-0.9.9-darwin-arm64.tar.gz` | macOS Apple Silicon | same |
+| `clipbridge-android-0.9.9.apk` | Android 8.0+ | client package (debug-signed, installs directly) |
+| `clipbridge-windows-0.9.9-x64.zip` | Windows 10/11 x64 | desktop client, unzip and run (single exe, bundles .NET 8) |
 | `SHA256SUMS.txt` | — | SHA-256 checksums for the above |
 
-**Docker deployment needs no download** — the image is on GHCR (public, `amd64` + `arm64`): `ghcr.io/hemuxd/clipbridge:0.0.12`. One `docker run` pulls and starts it; see [Quick start](#quick-start) above for the full steps (config, certificates).
+**Docker deployment needs no download** — the image is on GHCR (public, `amd64` + `arm64`): `ghcr.io/hemuxd/clipbridge:0.9.9`. One `docker run` pulls and starts it; see [Quick start](#quick-start) above for the full steps (config, certificates).
 
 ---
 

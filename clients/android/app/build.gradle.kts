@@ -14,8 +14,10 @@ android {
         minSdk = 24
         // targetSdk 保持 34，规避 Android 15 对前台服务(dataSync)的 6 小时时长上限
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.0.12"
+        // versionCode 必须单调递增，否则覆盖安装会被系统拒绝。
+        // 0.9.9 起改用「主*100+次」的编码（0.9.9 → 909），不再沿用 0.0.x 的流水号。
+        versionCode = 909
+        versionName = "0.9.9"
     }
 
     buildTypes {

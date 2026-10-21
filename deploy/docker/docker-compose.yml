@@ -37,7 +37,7 @@ services:
     #
     # image 指向 GHCR 上已发布的镜像。想换版本就改这里（或用 .env 覆盖，见下）。
     # 不带 registry 前缀时 compose 不会去拉，只会本地构建，这是最容易踩的坑。
-    image: ${CLIPBRIDGE_IMAGE:-ghcr.io/hemuxd/clipbridge}:${CLIPBRIDGE_VERSION:-0.0.12}
+    image: ${CLIPBRIDGE_IMAGE:-ghcr.io/hemuxd/clipbridge}:${CLIPBRIDGE_VERSION:-0.9.9}
 
     # pull 优先、build 兜底：
     #   · 镜像已发布  → 直接拉，用户零编译（这是默认路径）
@@ -53,7 +53,7 @@ services:
       dockerfile: Dockerfile.standalone
       args:
         # 版本号必须与上面的 image tag 一致，否则 healthz 里的版本号会对不上
-        VERSION: "${CLIPBRIDGE_VERSION:-0.0.12}"
+        VERSION: "${CLIPBRIDGE_VERSION:-0.9.9}"
         # 国内构建保留镜像源；海外机器可改为 https://proxy.golang.org,direct
         GOPROXY: "${CLIPBRIDGE_GOPROXY:-https://goproxy.cn,direct}"
         # Alpine 软件包源。apk 默认的 dl-cdn 在国内会卡住构建（见 Dockerfile 说明）。

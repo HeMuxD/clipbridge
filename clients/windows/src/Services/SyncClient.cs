@@ -54,7 +54,19 @@ public sealed class SyncClient : IDisposable
     public SyncClient(AppSettings settings)
     {
         _settings = settings;
-        _http = new HttpClient
+        // 用 SocketsHttpHandler 而不是默认构造，唯一的目的是控制代理。
+        //
+        // 系统代理（Clash / v2ray 之类）会把发往自建 NAS 的请求也劫持走，
+        // 而这类本地代理对「域名 + 非标准端口（8443）」经常转发失败：
+        // 表现是客户端一直报 "Unable to connect to the remote server"，
+        // 而同一台机器上用浏览器或 curl 直连却是通的。
+        // 自建服务端本来就在自己可控的网络里，没有走代理的必要，直接禁用。
+        _http = new HttpClient(new SocketsHttpHandler
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(15),
+            // 不读系统代理设置
+            UseProxy = false,
+        })
         {
             Timeout = TimeSpan.FromSeconds(60),
         };
@@ -284,6 +296,9 @@ public sealed class SyncClient : IDisposable
         using var ws = new System.Net.WebSockets.ClientWebSocket();
         ws.Options.SetRequestHeader("Authorization", $"Bearer {_settings.Token}");
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+        // WebSocket 同样不让它读系统代理 —— 理由见构造函数里关于代理的说明。
+        // 不加这一行的话，HTTP 能通、WS 依然会被本地代理劫持并失败。
+        ws.Options.Proxy = null;
 
         await ws.ConnectAsync(new Uri(WsUrl), ct);
         _ws = new ClientWebSocketCompat(ws);

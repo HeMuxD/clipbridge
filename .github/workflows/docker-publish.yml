@@ -1,7 +1,7 @@
 # ClipBridge 服务端镜像自动发布到 GHCR
 #
 # 触发方式：打 tag 推送
-#   git tag v0.0.12 && git push origin v0.0.12        # 正式版，同时打 latest
+#   git tag v0.9.9 && git push origin v0.9.9        # 正式版，同时打 latest
 #   git tag v0.0.11-image && git push origin ...      # CI 专用，不打 latest
 #
 # 产物：ghcr.io/hemuxd/clipbridge:<tag> 与 :sha-<commit>
@@ -17,7 +17,7 @@
 # 这种带后缀的 tag 不会覆盖 latest。
 #
 # 手动跑一次验证流程（不推 latest，只推指定版本号 + sha 标签）：
-#   Actions → Docker Publish → Run workflow → 填 0.0.12
+#   Actions → Docker Publish → Run workflow → 填 0.9.9
 
 name: Docker Publish
 
@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号，不带 v 前缀（例如 0.0.12）。留空则用 Dockerfile 里的默认值。'
+        description: '版本号，不带 v 前缀（例如 0.9.9）。留空则用 Dockerfile 里的默认值。'
         required: false
         default: ''
 
@@ -71,7 +71,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ---- 版本号与标签 ----
-      # tag 形如 v0.0.12 → 版本号 0.0.12，通过 build-arg 注入，
+      # tag 形如 v0.9.9 → 版本号 0.9.9，通过 build-arg 注入，
       # 服务端的 -version 与 /healthz 读的是同一个值（internal/buildinfo）。
       - name: 计算版本号与镜像标签
         id: meta
@@ -92,15 +92,15 @@ jobs:
 
           # ---- 分离「镜像 tag」与「服务端版本号」----
           #
-          # 两者不是一回事。tag 形如 v0.0.11-image、v0.0.12-rc1 时，
+          # 两者不是一回事。tag 形如 v0.0.11-image、v0.9.9-rc1 时，
           # 整个字符串（去掉 v）是合法的 Docker tag，但它不是一个合法的语义化版本号，
           # 不能直接塞进 -X buildinfo.Version —— 否则 /healthz 会返回
           # "version":"0.0.11-image"，客户端解析版本号的地方会拿到脏数据。
           #
           # 所以：镜像 tag 用完整字符串；注入服务端的只取第一段数字部分。
           #   v0.0.11-image  → tag 0.0.11-image，服务端版本号 0.0.11
-          #   v0.0.12-rc1    → tag 0.0.12-rc1，  服务端版本号 0.0.12
-          #   v0.0.12        → tag 0.0.12，      服务端版本号 0.0.12
+          #   v0.9.9-rc1    → tag 0.9.9-rc1，  服务端版本号 0.9.9
+          #   v0.9.9        → tag 0.9.9，      服务端版本号 0.9.9
           IMAGE_TAG="${VERSION}"
           APP_VERSION="$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')"
 
@@ -124,7 +124,7 @@ jobs:
           # sha 标签用于排查"用户跑的到底是哪次提交"，出问题时很有用
           TAGS="${TAGS},${IMAGE_REF}:sha-$(git rev-parse --short=12 HEAD)"
 
-          # latest 只在正式版打。带连字符的（v0.0.12-rc1、-beta）视为预发布，不覆盖 latest，
+          # latest 只在正式版打。带连字符的（v0.9.9-rc1、-beta）视为预发布，不覆盖 latest，
           # 否则一个测试版就会把所有人的 latest 顶掉。
           # workflow_dispatch 没有 tag，GITHUB_REF_NAME 是分支名，同样不该动 latest。
           if [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
