@@ -14,6 +14,11 @@ Dockerfile          text eol=lf
 *.template          text eol=lf
 .env.example        text eol=lf
 
+# Gradle wrapper 的 Unix 启动脚本同理：它要在 Linux / CI 上用 #!/bin/sh 执行，
+# 检出成 CRLF 会报 "bad interpreter: No such file or directory"。
+# Windows 上用的是 gradlew.bat，由下面 *.bat 那条保证 CRLF。
+gradlew             text eol=lf
+
 # Windows 上要用的脚本保留 CRLF
 *.bat               text eol=crlf
 *.cmd               text eol=crlf

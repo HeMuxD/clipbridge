@@ -32,6 +32,17 @@ public sealed class SyncClient : IDisposable
     // 等待 ACK 的消息：msgId -> TaskCompletionSource
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingAcks = new();
 
+    /// <summary>
+    /// 发送串行化闸门。
+    ///
+    /// ClientWebSocket **不允许两个 SendAsync 并发执行** —— 并发时会抛
+    /// InvalidOperationException（"There is already one outstanding 'SendAsync' call"）。
+    /// 而本类有两个发送方：心跳循环（每 30s）与 SendClipAsync（用户每次复制）。
+    /// 两者撞在同一条连接上只是概率问题，不是不可能 —— 一旦撞上，那条消息就丢了。
+    /// AcknowledgeAsync 之类的其他调用同样受此约束。
+    /// </summary>
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+
     private int _reconnectAttempt;
 
     public event Action<bool>? ConnectionChanged;
@@ -47,11 +58,34 @@ public sealed class SyncClient : IDisposable
         {
             Timeout = TimeSpan.FromSeconds(60),
         };
-        if (!string.IsNullOrEmpty(settings.Token))
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", settings.Token);
+        // 注意：这里【不要】设置 DefaultRequestHeaders.Authorization。
+        //
+        // 曾经的做法是在构造时按当时的 settings.Token 设一次默认头，结果是首次配对后
+        // 图片上传/下载一直 401：配对走的是 SettingsForm 里另建的临时 SyncClient
+        // （见 SettingsForm.OnPairClick），它只把新 Token 写回共享的 _settings，
+        // 而本实例的 _http 默认头还是构造时的空值 —— 且 DefaultRequestHeaders 一旦
+        // 在请求发出后被读过就会进入"已使用"状态，之后再改会抛异常。
+        //
+        // 改为每个请求现取 Token（见 NewAuthorizedRequest），配对成功立刻生效，
+        // 不再依赖"实例构造时机 == Token 就绪时机"这个脆弱假设。
     }
 
     private string BaseUrl => _settings.ServerUrl.TrimEnd('/');
+
+    /// <summary>
+    /// 构造一个带上"当前"Token 的请求。
+    ///
+    /// 不用 DefaultRequestHeaders 的原因见构造函数注释：Token 会在配对成功后被替换，
+    /// 而默认头是一个"设一次就固定"的容器。这里每次现取，保证配对后下一个请求就生效。
+    /// </summary>
+    private HttpRequestMessage NewRequest(HttpMethod method, string url)
+    {
+        var req = new HttpRequestMessage(method, url);
+        var token = _settings.Token;
+        if (!string.IsNullOrEmpty(token))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return req;
+    }
 
     private string WsUrl
     {
@@ -84,7 +118,13 @@ public sealed class SyncClient : IDisposable
         {
             var body = JsonSerializer.Serialize(req, JsonOpts);
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
-            using var resp = await _http.PostAsync($"{BaseUrl}/api/pair", content);
+            // 配对请求本身不需要 Token（服务端 /api/pair 是匿名接口）。
+            // 但这里仍走同一套构造方式，保持"所有 HTTP 出口只有一处"的一致。
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/pair")
+            {
+                Content = content,
+            };
+            using var resp = await _http.SendAsync(request);
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -103,8 +143,6 @@ public sealed class SyncClient : IDisposable
             }
 
             _settings.Token = result.Token;
-            _http.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", result.Token);
             StatusMessage?.Invoke("配对成功");
             return true;
         }
@@ -128,11 +166,17 @@ public sealed class SyncClient : IDisposable
             form.Add(fileContent, "file", "clip.png");
             form.Add(new StringContent(hash), "hash");
 
-            using var resp = await _http.PostAsync($"{BaseUrl}/api/upload", form);
+            // 现取 Token（配对后立刻生效），见 NewRequest 的说明
+            using var request = NewRequest(HttpMethod.Post, $"{BaseUrl}/api/upload");
+            request.Content = form;
+
+            using var resp = await _http.SendAsync(request);
             if (!resp.IsSuccessStatusCode)
             {
                 var err = await resp.Content.ReadAsStringAsync();
-                StatusMessage?.Invoke($"上传失败：HTTP {(int)resp.StatusCode} {Trim(err)}");
+                StatusMessage?.Invoke(resp.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    ? "上传失败：Token 无效或已过期，请重新配对"
+                    : $"上传失败：HTTP {(int)resp.StatusCode} {Trim(err)}");
                 return null;
             }
 
@@ -151,7 +195,10 @@ public sealed class SyncClient : IDisposable
     {
         try
         {
-            using var resp = await _http.GetAsync(url);
+            // 下载地址指向 /f/，服务端不校验 Token；这里仍带上（若已配对），
+            // 便于将来给静态资源加签名后无需再改客户端。
+            using var request = NewRequest(HttpMethod.Get, url);
+            using var resp = await _http.SendAsync(request);
             if (!resp.IsSuccessStatusCode) return null;
             return await resp.Content.ReadAsByteArrayAsync();
         }
@@ -166,17 +213,36 @@ public sealed class SyncClient : IDisposable
     /// <summary>启动连接循环（阻塞在后台任务里，自动重连）</summary>
     public void Start()
     {
-        if (_runTask is not null) return;
+        // _runTask 必须在退出时清空，否则 Stop() 之后再 Start() 会变成 no-op：
+        // 旧实现只判断 `_runTask is not null`，而 Stop() 从不清它 ——
+        // 「重新连接」菜单点第二次就没反应了。
+        if (_runTask is { IsCompleted: false }) return;
 
+        _runTask = null;
+        _cts?.Dispose();
         _cts = new CancellationTokenSource();
-        _runTask = Task.Run(() => RunLoopAsync(_cts.Token));
+        var ct = _cts.Token;
+
+        // 手动重启时把退避计数归零，让"用户主动重连"立刻生效而不是等 60 秒
+        _reconnectAttempt = 0;
+        _runTask = Task.Run(() => RunLoopAsync(ct), ct);
     }
 
     public void Stop()
     {
-        _cts?.Cancel();
+        try { _cts?.Cancel(); } catch { }
         try { _ws?.Dispose(); } catch { }
         _ws = null;
+
+        // 连接被主动断开时，等待中的 ACK 不会再到达；全部按失败释放，
+        // 否则 SendClipAsync 的调用方要白等满 10 秒超时。
+        foreach (var kv in _pendingAcks)
+        {
+            kv.Value.TrySetResult(false);
+        }
+        _pendingAcks.Clear();
+
+        IsConnected = false;
     }
 
     private async Task RunLoopAsync(CancellationToken ct)
@@ -227,8 +293,8 @@ public sealed class SyncClient : IDisposable
         ConnectionChanged?.Invoke(true);
         StatusMessage?.Invoke("已连接到服务端");
 
-        // 发送自我介绍
-        await SendAsync(ws, new Envelope
+        // 发送自我介绍。走串行闸门，避免与紧随其后的心跳/业务消息并发发送。
+        await SendSerializedAsync(ws, new Envelope
         {
             Type = MsgType.Hello,
             MsgId = Guid.NewGuid().ToString(),
@@ -305,7 +371,15 @@ public sealed class SyncClient : IDisposable
                 {
                     var payload = payloadEl.Deserialize<ClipPayload>(JsonOpts);
                     if (payload is not null && !string.IsNullOrEmpty(payload.Hash))
+                    {
+                        // 先把消息投给上层（真正写入剪贴板/落盘），再回 ACK。
+                        //
+                        // 顺序是有意的：协议第 7.2 节第 5 步要求"处理完再 ack"，
+                        // ACK 的语义是"我已落地"而不是"我已收到字节"。
+                        // 这样服务端日志里的 ACK 才是可信的投递证据。
                         ClipReceived?.Invoke(payload);
+                        AckReceivedClip(root, payload);
+                    }
                 }
                 break;
 
@@ -341,6 +415,46 @@ public sealed class SyncClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// 对收到并已交给上层处理的 clip 消息回一条 ACK。
+    ///
+    /// 协议第 7.2 节要求客户端确认收到（服务端 onWSSMessage 会记 debug 日志）。
+    /// 这条 ACK 是"服务端已广播"与"对端已落地"之间唯一由客户端提供的证据，
+    /// 排障时价值很高。
+    ///
+    /// 用 fire-and-forget：ACK 发不出去不影响内容本身已经落地，
+    /// 而且这里跑在接收循环里，同步等待会阻塞后续消息。
+    /// </summary>
+    private void AckReceivedClip(JsonElement root, ClipPayload payload)
+    {
+        var ws = _ws?.Inner;
+        if (ws is null || ws.State != System.Net.WebSockets.WebSocketState.Open) return;
+
+        var ackMsgId = root.TryGetProperty("msgId", out var m) ? m.GetString() : null;
+        if (string.IsNullOrEmpty(ackMsgId)) return;
+
+        var env = new Envelope
+        {
+            Type = MsgType.Ack,
+            MsgId = Guid.NewGuid().ToString(),
+            Ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Payload = new AckPayload { MsgId = ackMsgId, Status = "ok" },
+        };
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await SendSerializedAsync(ws, env, cts.Token);
+            }
+            catch
+            {
+                // ACK 失败无所谓，下一条消息还会带新的 ACK
+            }
+        });
+    }
+
     /// <summary>心跳：30 秒一次。服务端也依赖它维持连接活性。</summary>
     private async Task HeartbeatLoopAsync(System.Net.WebSockets.ClientWebSocket ws, CancellationToken ct)
     {
@@ -353,7 +467,7 @@ public sealed class SyncClient : IDisposable
 
                 try
                 {
-                    await SendAsync(ws, new Envelope
+                    await SendSerializedAsync(ws, new Envelope
                     {
                         Type = MsgType.Ping,
                         MsgId = Guid.NewGuid().ToString(),
@@ -395,7 +509,7 @@ public sealed class SyncClient : IDisposable
 
         try
         {
-            await SendAsync(ws, env, CancellationToken.None);
+            await SendSerializedAsync(ws, env, CancellationToken.None);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             using var reg = cts.Token.Register(() => tcs.TrySetResult(false));
@@ -418,6 +532,23 @@ public sealed class SyncClient : IDisposable
         var bytes = Encoding.UTF8.GetBytes(json);
         return ws.SendAsync(new ArraySegment<byte>(bytes),
             System.Net.WebSockets.WebSocketMessageType.Text, true, ct);
+    }
+
+    /// <summary>
+    /// 串行化的发送。所有对外发送都必须走这里，不能直接调 SendAsync。
+    /// 为什么必须：ClientWebSocket 不支持并发 SendAsync，见 _sendGate 的说明。
+    /// </summary>
+    private async Task SendSerializedAsync(System.Net.WebSockets.ClientWebSocket ws, Envelope env, CancellationToken ct)
+    {
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await SendAsync(ws, env, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
     }
 
     private static string Trim(string s)

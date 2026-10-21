@@ -14,6 +14,8 @@ internal static class NativeMethods
     public const int WM_CLIPBOARDUPDATE = 0x031D;
     public const int WM_HOTKEY = 0x0312;
     public const int WM_DESTROY = 0x0002;
+    /// <summary>WM_CLOSE：请求窗口关闭。跨线程时用 PostMessage 投递是安全做法。</summary>
+    public const int WM_CLOSE = 0x0010;
 
     /// <summary>HWND_MESSAGE：把窗口设为"消息专用窗口"，不可见、不进入任务栏。</summary>
     public static readonly IntPtr HWND_MESSAGE = new(-3);
@@ -44,6 +46,18 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyWindow(IntPtr hwnd);
+
+    /// <summary>
+    /// 把消息投递到窗口所属线程的队列后立即返回（异步）。
+    /// 与 SendMessage 的区别：不会等待对方处理，因此不会死锁，也允许跨线程调用。
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>当前线程的 Win32 线程 ID。用于判断"是否在该窗口的属主线程上"。</summary>
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
     public static extern IntPtr DefWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);

@@ -1,13 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 主界面主题：无 ActionBar，交给 Compose 渲染 -->
-    <style name="Theme.ClipBridge" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      主界面主题：无 ActionBar，交给 Compose 渲染。
 
-    <!-- 分享接收 Activity 用透明主题，避免闪屏 -->
-    <style name="Theme.ClipBridge.Transparent" parent="android:Theme.Material.Light.NoActionBar">
+      父主题用 AppCompat 系（而不是 android:Theme.Material.*）：
+      ShareReceiverActivity 继承 AppCompatActivity，AppCompat 在创建视图层次时
+      会校验主题是否带 AppCompatTheme 属性，否则抛
+      "You need to use a Theme.AppCompat theme (or descendant) with this activity"。
+      主界面是 ComponentActivity（不校验主题）所以原先没暴露问题，
+      但两个 Activity 共用同一套主题定义，统一到 AppCompat 系最省心。
+    -->
+    <style name="Theme.ClipBridge" parent="Theme.AppCompat.DayNight.NoActionBar" />
+
+    <!--
+      分享接收 Activity 用透明主题，避免从别的 App 分享过来时闪一下白屏。
+
+      同样必须继承 AppCompat 主题 —— 这条是原来真正会崩的地方：
+      之前父主题是 framework 的 android:Theme.Material.Light.NoActionBar，
+      配上 AppCompatActivity 属于非法组合。
+    -->
+    <style name="Theme.ClipBridge.Transparent" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
     </style>
 </resources>

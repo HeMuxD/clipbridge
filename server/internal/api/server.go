@@ -539,11 +539,32 @@ func (s *Server) onWSSMessage(client *hub.Client, raw []byte) any {
 	case model.TypePing:
 		return model.Envelope{Type: model.TypePong, MsgID: env.MsgID, TS: time.Now().UnixMilli()}
 
+	case model.TypeHello:
+		// 客户端的自我介绍。设备名称等元数据在握手鉴权时就已经从数据库取到了
+		// （见 handleWS 的 authenticate），这里不需要再改写任何状态，只需确认收到。
+		//
+		// 不处理它并不会出错 —— 消息会落到 default 分支被静默忽略。但那样一来，
+		// 日志里看不出"客户端确实完成了握手"，排障时无法区分
+		// "客户端没发 hello" 与 "发了但服务端没认"。协议第 3.1 节把它列为
+		// C → S 的必发消息，所以这里显式应答。
+		s.log.Debug("收到客户端自我介绍",
+			"deviceId", client.DeviceID, "name", client.DeviceName, "platform", client.Platform)
+		return nil
+
 	case model.TypeClip:
 		return s.handleClipMessage(client, env, raw)
 
 	case model.TypeAck:
-		// 客户端确认已收到，服务端无需额外处理
+		// 客户端确认已收到广播内容。服务端不依赖 ACK 做重投（离线补推由
+		// pending_deliveries 负责），所以这里只记一条 debug 日志，便于确认
+		// 客户端确实收到了消息 —— 这是"服务端已发送"与"客户端已落地"之间
+		// 唯一的、由对端提供的证据。
+		var ack model.AckPayload
+		if err := remarshal(env.Payload, &ack); err == nil && ack.Status != "" {
+			s.log.Debug("收到客户端 ACK",
+				"deviceId", client.DeviceID, "ackMsgId", truncate(ack.MsgID, 12),
+				"status", ack.Status, "code", ack.Code)
+		}
 		return nil
 
 	default:

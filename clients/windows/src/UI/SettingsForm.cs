@@ -441,14 +441,20 @@ public sealed class SettingsForm : Form
             .Distinct()
             .ToList();
 
+        // 先写注册表，再把结果写进 _settings，最后才 Save。
+        // 旧顺序是 Save → SetEnabled → 赋值，导致 settings.json 里的 AutoStart
+        // 永远是"上一次"的值（滞后一轮）。虽然 UI 显示读的是注册表所以用户无感，
+        // 但配置文件本身是错的，外部排障时会被误导。
+        var autoStartOk = AutoStart.SetEnabled(_autoStart.Checked);
+        _settings.AutoStart = _autoStart.Checked;
+
         SettingsStore.Save(_settings);
 
-        if (!AutoStart.SetEnabled(_autoStart.Checked))
+        if (!autoStartOk)
         {
             MessageBox.Show(this, "开机自启设置失败（可能被安全软件拦截）", "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        _settings.AutoStart = _autoStart.Checked;
 
         _orchestrator.Reload();
 

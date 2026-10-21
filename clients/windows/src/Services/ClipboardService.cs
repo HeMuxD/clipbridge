@@ -27,7 +27,6 @@ public sealed class ClipboardService : IDisposable
     private readonly HashCache _cache;
     private readonly Func<bool> _shouldSync;
     private MessageWindow? _window;
-    private Thread? _loopThread;
     private bool _disposed;
 
     /// <summary>检测到新的剪贴板内容时触发</summary>
@@ -45,7 +44,15 @@ public sealed class ClipboardService : IDisposable
     }
 
     /// <summary>
-    /// 启动监听。会创建独立线程跑消息循环。
+    /// 启动监听。
+    ///
+    /// 关于线程：窗口必须建在**最终派发它消息的那个线程**上。这里由调用方
+    /// （TrayApplication 构造函数，运行在 UI 线程）创建，之后 WM_CLIPBOARDUPDATE
+    /// 由 WinForms 自己的消息泵在 UI 线程上派发到 WndProc —— 这是正确且够用的。
+    ///
+    /// 早先的实现额外起了一个 STA 线程跑 GetMessage 循环，指望它来接消息。
+    /// 那是无效的：消息按窗口所属线程投递，那个线程上没有这个窗口，
+    /// GetMessage(NULL) 永远等不到，纯粹是空转的死线程。
     /// </summary>
     public void Start()
     {
@@ -59,14 +66,6 @@ public sealed class ClipboardService : IDisposable
         _window = new MessageWindow();
         _window.ClipboardUpdated += OnClipboardUpdated;
         _window.StartClipboardListener();
-
-        _loopThread = new Thread(_window.RunMessageLoop)
-        {
-            IsBackground = true,
-            Name = "ClipBridge.ClipboardPump",
-        };
-        _loopThread.SetApartmentState(ApartmentState.STA);
-        _loopThread.Start();
 
         IsListening = true;
         ListenerStateChanged?.Invoke(true);
@@ -207,8 +206,8 @@ public sealed class ClipboardService : IDisposable
         {
             try
             {
-                // 用 SetDataObject 且 copy=false + 自定义格式，可以避免
-                // 本进程退出后剪贴板内容丢失的问题
+                // copy=true：让剪贴板持有数据副本，本进程退出后内容仍在。
+                // （旧注释写的是 copy=false，与实际参数不符，已更正。）
                 Clipboard.SetDataObject(text, copy: true, retryTimes: 3, retryDelay: 50);
                 return true;
             }
@@ -236,6 +235,11 @@ public sealed class ClipboardService : IDisposable
             {
                 using var ms = new MemoryStream(pngBytes);
                 using var image = Image.FromStream(ms);
+
+                // 必须复制一份交给剪贴板：Image.FromStream 的流不能被提前释放。
+                // ⚠️ 这个 Bitmap 不能 using —— SetDataObject(copy: true) 会自己
+                // 持有它并负责销毁；在这里提前 Dispose 会导致剪贴板拿到已释放的位图
+                // （粘贴时表现为空白或抛异常）。
                 var bitmap = new Bitmap(image);
 
                 var data = new DataObject();

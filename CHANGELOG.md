@@ -7,6 +7,7 @@
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
+| **未发布** | 2026-10-21 | 代码审查批量修复：首次配对后图片上传 401、敏感过滤假开关、Android 分享入口主题崩溃风险、ws 回调自激重连、协议 ack/hello 缺口等 14 项；补 Gradle Wrapper |
 | **v0.0.11** | 2026-10-12 | 真正修掉「一张截图三端各出现两份」—— 元凶是小米相册云同步把截图压缩后推到另一台手机，用像素指纹（dHash）去重阻断 |
 | v0.0.10 | 2026-10-12 | 修掉手机端存相册时 MIME 写死导致字节被重新编码、触发截图监听回环 |
 | v0.0.9 | 2026-10-12 | 服务端清理节奏改为每周一 03:00 一次（只保留当天 00:00 之后产生的缓存），磁盘上限检查保持每 30 分钟 |
@@ -20,6 +21,74 @@
 | v0.0.1 | 2026-09-29 | 首个对外发布版本 |
 
 ---
+
+## 未发布 改动内容（2026-10-21）
+
+一轮代码审查后批量修复的缺陷。三端都有改动，**服务端与 Windows 客户端需要重新部署**，
+Android 需要重装 APK。
+
+#### Windows 客户端
+
+- **首次配对后图片上传 401（真实的"新用户第一次就踩"）**：`SyncClient` 在构造时按当时
+  的 Token 设了一次 `DefaultRequestHeaders.Authorization`，而配对走的是设置窗口里另建的
+  临时实例，只把新 Token 写回共享的 `_settings`。结果长生命周期实例的 HTTP 客户端始终
+  没有凭证 —— 直到重启进程才恢复。改为每次请求现取 Token（`NewRequest`）。
+- **敏感内容过滤是假开关**：`SensitiveFilter.IsSensitive` 写好了但全工程零调用点，
+  设置页里"跳过密码/卡号"的勾选完全不起作用。现已接入 `SendTextAsync` 的上行链路。
+- **下行失败后该内容永久漏同步**：收到远端内容时先把 hash 登记进缓存（必须早于写剪贴板，
+  否则回环挡不住），但随后下载/写入失败时不回滚 —— 对端重发也会被"已处理"跳过。
+  新增 `HashCache.Remove`，在所有失败路径撤销登记；上行发送失败同样撤销。
+- **并发 `SendAsync` 会丢消息**：心跳循环与用户复制会同时往同一条 `ClientWebSocket` 发，
+  而它不支持并发发送（抛 `InvalidOperationException`）。加了 `SemaphoreSlim` 串行闸门。
+- **「重新连接」菜单第二次点没反应**：`Start()` 判断 `_runTask is not null` 就直接返回，
+  而 `Stop()` 从不清空它。改为按 `IsCompleted` 判断，并在 `Stop()` 里释放挂起的 ACK。
+- **`MessageWindow` 空转死线程**：窗口在 UI 线程创建，却又另起线程跑 `GetMessage`，
+  而 Win32 消息按窗口所属线程投递 —— 那个线程永远接不到 `WM_CLIPBOARDUPDATE`，
+  纯粹空转并泄漏到进程退出。已删除该线程，明确"窗口归创建它的线程所有"。
+- 其余：`AutoStart` 字段永久滞后一次（Save 在赋值之前）、`WriteImage` 的 Bitmap 泄漏、
+  协议要求的 `ack` 未实现（现已补上）、`Envelope.Payload` 类型收窄导致无法承载 ACK。
+
+#### Android 客户端
+
+- **分享入口有崩溃风险**：`ShareReceiverActivity` 继承 `AppCompatActivity`，主题父级却是
+  framework 的 `android:Theme.Material.*` —— 这是非法组合，AppCompat 会抛
+  `IllegalStateException`。两个主题统一改为 `Theme.AppCompat.DayNight.NoActionBar`。
+- **ws 回调无 socket 身份校验 → 自激重连**：`wsListener` 是全局单例，旧 socket 的
+  `onClosed` 异步到达时会把**新连接**置为断开并触发重连，形成"刚连上就被判掉线"的循环。
+  现在每个回调都先确认 `webSocket === ws`。
+- **读超时 30s 与应用层心跳 30s 完全贴身**：网络稍有抖动就会在两次心跳之间被判超时。
+  改为 `readTimeout(0)` + OkHttp `pingInterval(25s)`。
+- 其余：`dHash` 全尺寸解码的 OOM 风险（改为 `inSampleSize` 降采样 + RGB_565）、
+  `HashCache` 文本与像素指纹共用容量导致互相挤占（拆成两档各 200）、
+  `handledUris` 跨线程竞态与无上限增长（加锁 + 500 条上限）、
+  协议要求的 `ack` 未实现（已补上）、`network_security_config` 里把 IP 网段当域名写
+  （`192.168.0.0` 只能匹配主机名恰好等于它的请求，实际一个局域网 IP 都放行不了）。
+
+#### 服务端
+
+- **`hello` 消息落进 default 被静默忽略**：协议第 3.1 节把它列为客户端必发消息，
+  Windows 也确实在发，但服务端没有对应 case —— 日志里完全看不出握手发生过。
+  补上显式处理。
+- `ack` 从"什么都不做"改为记一条 debug 日志（它是"服务端已广播"与"客户端已落地"
+  之间唯一的对端证据）。
+- 新增 4 个单测覆盖消息信封分发：hello / ack / ping-pong / 非法 JSON。
+
+#### 工程与文档
+
+- **补上 Gradle Wrapper**（`gradlew`、`gradlew.bat`、`gradle-wrapper.jar`）——
+  之前仓库里没有，换台机器构建必须先手工准备 Gradle 8.9，不可重现。
+- `.gitignore` 补上 `tools/` 下的项目内工具链与图标脚本预览产物。
+- 修正若干"注释与实现不符"：`NormalizeToPng` 声称检查尺寸实际只查魔数、
+  `ClipboardService.WriteText` 注释写 `copy=false` 实际是 `true`、
+  `MessageWindow.RunMessageLoop` 声称"必须独立线程"。
+
+**验证**：Go 1.22.12（`go vet` / `go test ./...` 全绿）、.NET SDK 8.0.425
+（`dotnet build` 0 警告 0 错误、`dotnet publish` 单文件自包含成功）、
+JDK 17 + Gradle 8.9 + Android SDK 35（`assembleDebug` 成功产出 APK）。
+均为真实编译验证，非静态推演。
+
+**仍未验证**：Android 无障碍上行在真机上的命中率（历史遗留问题，需要真机）、
+以及本轮改动后的三端真实联调。
 
 ## v0.0.11 改动内容
 

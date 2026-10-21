@@ -165,6 +165,20 @@ public sealed class SyncOrchestrator : IDisposable
             return;
         }
 
+        // 敏感内容过滤（设置里那个"跳过密码/卡号"的开关）。
+        //
+        // 之前这里是空的：SensitiveFilter 类写好了却没有任何调用点，
+        // 于是 UI 上的开关是个纯装饰 —— 勾不勾行为完全一样。现在接通。
+        //
+        // 注意这是"防误伤"而不是安全边界：真正的边界是服务端不过度留存
+        // 与可选的端到端加密。所以命中时只跳过 + 记日志，不打扰用户。
+        if (_settings.FilterSensitive && SensitiveFilter.IsSensitive(text))
+        {
+            Log.Info($"文本疑似含敏感信息（密码/卡号/密钥等），已按设置跳过同步（{text.Length} 字）");
+            StatusMessage?.Invoke("内容疑似敏感，已跳过同步");
+            return;
+        }
+
         var payload = new ClipPayload
         {
             Kind = ClipKind.Text,
@@ -175,6 +189,13 @@ public sealed class SyncOrchestrator : IDisposable
         };
 
         var ok = await _client.SendClipAsync(payload);
+        if (!ok)
+        {
+            // 发送失败就把 hash 撤销 —— ClipboardService 在我们上报前已经 Add 过一次
+            // （见其 OnClipboardUpdated），不撤销的话这段内容永远不会再被自动上报：
+            // 用户重连后想再复制同一段文字，会被 Contains 当成"已处理"跳过。
+            _cache.Remove(payload.Hash);
+        }
         StatusMessage?.Invoke(ok ? $"已同步文本（{text.Length} 字）" : "文本同步失败");
     }
 
@@ -191,6 +212,8 @@ public sealed class SyncOrchestrator : IDisposable
         var upload = await _client.UploadImageAsync(pngBytes, hash);
         if (upload is null)
         {
+            // 与文本同理：上传失败要撤销登记的 hash，否则这张图再也不会被自动同步
+            _cache.Remove(hash);
             StatusMessage?.Invoke("图片上传失败");
             return;
         }
@@ -214,6 +237,13 @@ public sealed class SyncOrchestrator : IDisposable
         _cache.Add(payload.Hash);
 
         var ok = await _client.SendClipAsync(payload);
+        if (!ok)
+        {
+            // 上传成功但 clip 消息没发出去：服务端已有文件、其他设备没收到内容。
+            // 撤销 hash，让用户重发这张图时还能再试一次。
+            _cache.Remove(payload.Hash);
+            _cache.Remove(hash);
+        }
         StatusMessage?.Invoke(ok
             ? $"已同步图片（{upload.Size / 1024.0:F0} KB）"
             : "图片同步失败");
@@ -240,61 +270,85 @@ public sealed class SyncOrchestrator : IDisposable
             // 监听器必须在那一刻能查到该哈希并跳过，否则形成回环。
             _cache.Add(payload.Hash);
 
-            if (payload.Kind == ClipKind.Text)
+            // 后面任何一步失败，都要把这个 hash 撤销登记 —— 否则这份内容
+            // 就永远被 Contains 挡在门外，对端重发也进不来。
+            var delivered = false;
+            try
             {
-                if (!_settings.SyncText) return;
-                if (payload.Text is null) return;
-
-                var ok = await _sta.InvokeAsync(() => ClipboardService.WriteText(payload.Text));
-                if (ok)
+                if (payload.Kind == ClipKind.Text)
                 {
-                    Log.Info($"已写入远端文本（来自 {src}）");
-                    RemoteContentReceived?.Invoke($"收到来自「{src}」的文本");
+                    if (!_settings.SyncText) return;
+                    if (payload.Text is null) return;
+
+                    var ok = await _sta.InvokeAsync(() => ClipboardService.WriteText(payload.Text));
+                    if (ok)
+                    {
+                        delivered = true;
+                        Log.Info($"已写入远端文本（来自 {src}）");
+                        RemoteContentReceived?.Invoke($"收到来自「{src}」的文本");
+                    }
+                    else
+                    {
+                        Log.Warn("写入剪贴板失败");
+                    }
+                }
+                else if (payload.Kind == ClipKind.Image)
+                {
+                    if (!_settings.SyncImage) return;
+                    if (string.IsNullOrEmpty(payload.Url)) return;
+
+                    var bytes = await _client.DownloadImageAsync(payload.Url);
+                    if (bytes is null)
+                    {
+                        Log.Warn("图片下载失败");
+                        return;
+                    }
+
+                    // 先写剪贴板（用户最直接的感知方式），再往磁盘留一份。
+                    // 注意必须切到 STA 线程：下行事件来自 ThreadPool 的 MTA 线程，
+                    // 直接在 MTA 上调 Clipboard 会抛 ThreadStateException。
+                    var ok = await _sta.InvokeAsync(() => ClipboardService.WriteImage(bytes));
+
+                    string? savedPath = null;
+                    if (_settings.SaveReceivedImages)
+                    {
+                        savedPath = ImageSaver.Save(bytes, SettingsStore.ResolveImageFolder(_settings));
+                    }
+
+                    if (ok) Log.Info($"已写入远端图片（来自 {src}）");
+                    else Log.Warn("写入剪贴板失败（图片）");
+
+                    if (savedPath is not null) Log.Info($"图片已留档：{savedPath}");
+                    else if (_settings.SaveReceivedImages) Log.Warn("图片留档失败");
+
+                    // 只要有一边成功就算收到了（另一边失败不影响用户拿到图）
+                    if (ok || savedPath is not null)
+                    {
+                        delivered = true;
+                        RemoteContentReceived?.Invoke(DescribeImageReceived(src, ok, savedPath));
+                    }
                 }
                 else
                 {
-                    Log.Warn("写入剪贴板失败");
+                    // 未知 kind：不认识的类型不该占着 hash
+                    Log.Warn($"未知的内容类型：{payload.Kind}");
                 }
             }
-            else if (payload.Kind == ClipKind.Image)
+            finally
             {
-                if (!_settings.SyncImage) return;
-                if (string.IsNullOrEmpty(payload.Url)) return;
-
-                var bytes = await _client.DownloadImageAsync(payload.Url);
-                if (bytes is null)
+                if (!delivered)
                 {
-                    Log.Warn("图片下载失败");
-                    return;
-                }
-
-                // 先写剪贴板（用户最直接的感知方式），再往磁盘留一份。
-                // 注意必须切到 STA 线程：下行事件来自 ThreadPool 的 MTA 线程，
-                // 直接在 MTA 上调 Clipboard 会抛 ThreadStateException。
-                var ok = await _sta.InvokeAsync(() => ClipboardService.WriteImage(bytes));
-
-                string? savedPath = null;
-                if (_settings.SaveReceivedImages)
-                {
-                    savedPath = ImageSaver.Save(bytes, SettingsStore.ResolveImageFolder(_settings));
-                }
-
-                if (ok) Log.Info($"已写入远端图片（来自 {src}）");
-                else Log.Warn("写入剪贴板失败（图片）");
-
-                if (savedPath is not null) Log.Info($"图片已留档：{savedPath}");
-                else if (_settings.SaveReceivedImages) Log.Warn("图片留档失败");
-
-                // 只要有一边成功就算收到了（另一边失败不影响用户拿到图）
-                if (ok || savedPath is not null)
-                {
-                    RemoteContentReceived?.Invoke(DescribeImageReceived(src, ok, savedPath));
+                    _cache.Remove(payload.Hash);
+                    Log.Info($"内容未成功交付，已撤销去重登记（{payload.Hash[..Math.Min(12, payload.Hash.Length)]}）");
                 }
             }
         }
         catch (Exception ex)
         {
             Log.Error("处理远端内容失败", ex);
+            // 异常路径同样要撤销，交给上面的 finally 已覆盖；
+            // 这里兜底处理 InvokeAsync 抛出前的极端情况。
+            _cache.Remove(payload.Hash);
         }
     }
 
@@ -313,25 +367,30 @@ public sealed class SyncOrchestrator : IDisposable
 
     // ---------- 工具 ----------
 
-    /// <summary>把任意图片字节统一转成 PNG，保证跨端一致性</summary>
+    /// <summary>
+    /// 把任意图片字节统一转成 PNG，保证跨端一致性。
+    ///
+    /// 已是 PNG 的字节直接原样返回，避免一次无谓的"解码 → 重编码"（会掉画质、
+    /// 也会让同一张图在两端算出不同的字节 hash）。其它格式才真正转码。
+    /// </summary>
     private static byte[] NormalizeToPng(byte[] raw)
     {
+        // PNG 魔数：89 50 4E 47 0D 0A 1A 0A
+        if (raw.Length >= 8 && raw[0] == 0x89 && raw[1] == 0x50 &&
+            raw[2] == 0x4E && raw[3] == 0x47)
+            return raw;
+
         try
         {
             using var ms = new MemoryStream(raw);
             using var img = Image.FromStream(ms);
-
-            // 如果本来就是 PNG 且尺寸不大，直接返回原字节，避免重编码
-            if (raw.Length >= 8 && raw[0] == 0x89 && raw[1] == 0x50)
-                return raw;
-
             using var outMs = new MemoryStream();
             img.Save(outMs, System.Drawing.Imaging.ImageFormat.Png);
             return outMs.ToArray();
         }
         catch
         {
-            // 不是有效图片，原样返回，由服务端判断
+            // 不是有效图片，原样返回，由服务端按魔数判断
             return raw;
         }
     }

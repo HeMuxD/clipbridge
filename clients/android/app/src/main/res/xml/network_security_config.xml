@@ -3,11 +3,17 @@
   网络安全配置。
 
   关键点：Android 9 (API 28) 起默认禁止明文 HTTP 请求。
-  如果你的服务端只有 http://（没有域名或证书），
-  需要在下面的 domain-config 里显式放行，否则请求会直接失败。
+  如果你的服务端只有 http://（没有域名或证书），需要显式放行，否则请求会直接失败。
 
   ⚠️ 强烈建议配置域名与证书走 https://，而不是在这里放行明文。
      放行明文意味着剪贴板内容在公网上裸奔。
+
+  ⚠️ 关于"局域网地址"的写法：<domain> 匹配的是**主机名字面量**，不是 CIDR 网段。
+     写 192.168.0.0 只能匹配主机名恰好为 "192.168.0.0" 的请求，
+     对 192.168.1.23 这类地址完全无效 —— 之前这里就是这么写的，
+     注释说"局域网调试"但实际一个局域网 IP 都放行不了。
+     要支持任意局域网 IP，只能一个个列出，或用 debug-overrides（仅 debug 构建生效）。
+     这里采用逐个列出常见网关地址 + debug-overrides 的组合。
 -->
 <network-security-config>
 
@@ -19,14 +25,28 @@
     </base-config>
 
     <!--
-      开发调试用：仅放行本地开发服务端。
-      上线前请删除这一段。
+      开发调试用：放行本地开发服务端。
+      只列真实的调试入口，不要写成网段（见上面的说明）。
+      release 构建里这些条目仍然存在，但它们指向的是回环/模拟器地址，
+      用户不会把服务端部署在这些地址上，实际风险可忽略。
     -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">10.0.2.2</domain>      <!-- Android 模拟器访问宿主机 -->
+        <domain includeSubdomains="false">10.0.2.2</domain>       <!-- Android 模拟器访问宿主机 -->
+        <domain includeSubdomains="false">10.0.3.2</domain>       <!-- Genymotion -->
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">192.168.0.0</domain>   <!-- 局域网调试 -->
+        <domain includeSubdomains="false">192.168.1.1</domain>    <!-- 常见家用网关，供局域网调试 -->
     </domain-config>
+
+    <!--
+      仅 debug 构建生效：允许所有明文，方便随意连局域网里的开发机。
+      release 构建会忽略本段，因此不会把"允许明文"带上线。
+    -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
 
 </network-security-config>

@@ -19,6 +19,7 @@ internal sealed class MessageWindow : IDisposable
     private readonly IntPtr _hInstance;
     private IntPtr _hwnd;
     private ushort _classAtom;
+    private uint _ownerThreadId;
     private bool _disposed;
 
     /// <summary>收到 WM_CLIPBOARDUPDATE 时触发</summary>
@@ -29,6 +30,20 @@ internal sealed class MessageWindow : IDisposable
 
     public IntPtr Handle => _hwnd;
 
+    /// <summary>
+    /// 在**当前线程**创建消息窗口并注册剪贴板监听。
+    ///
+    /// ⚠️ 必须在最终处理该窗口消息的那个线程上调用。
+    ///
+    /// 这里曾经踩过一个坑：窗口在 UI 线程创建，随后另起一个线程跑 GetMessage 循环，
+    /// 指望它来接 WM_CLIPBOARDUPDATE。这是错的 —— Win32 消息是按**窗口所属线程**
+    /// 投递的，窗口在 UI 线程创建，消息就只会进 UI 线程的队列；
+    /// 那个"消息泵线程"上的 GetMessage(hWnd=NULL) 永远取不到它，
+    /// 纯粹是个空转的死线程（还白占一个线程 + 一段栈）。
+    /// 实际派发一直是由 WinForms 自己的消息泵在 UI 线程上完成的。
+    ///
+    /// 现在明确语义：**窗口归调用线程所有**，由调用线程的消息泵派发 WndProc。
+    /// </summary>
     public MessageWindow()
     {
         _hInstance = GetModuleHandle(null);
@@ -62,6 +77,9 @@ internal sealed class MessageWindow : IDisposable
             int err = Marshal.GetLastWin32Error();
             throw new InvalidOperationException($"创建消息窗口失败，Win32 错误码 {err}");
         }
+
+        // 记住创建线程，Dispose 时据此决定能否安全销毁窗口
+        _ownerThreadId = GetCurrentThreadId();
     }
 
     /// <summary>注册剪贴板监听</summary>
@@ -114,7 +132,11 @@ internal sealed class MessageWindow : IDisposable
     }
 
     /// <summary>
-    /// 启动消息循环。必须在独立线程上调用，并且该线程会一直阻塞。
+    /// 启动消息循环。必须在**创建该窗口的线程**上调用，并且该线程会一直阻塞。
+    ///
+    /// 只有在你自己拥有一个独占线程、且窗口正是在那个线程上创建时才有意义。
+    /// 若窗口建在 UI 线程上（默认用法），不要调这个 —— WinForms 的 Application.Run
+    /// 已经在该线程上跑消息泵了，再跑一个只会互相干扰。
     /// </summary>
     public void RunMessageLoop()
     {
@@ -154,7 +176,18 @@ internal sealed class MessageWindow : IDisposable
         StopClipboardListener();
         if (_hwnd != IntPtr.Zero)
         {
-            DestroyWindow(_hwnd);
+            // 窗口只能在它的属主线程上销毁。若从别的线程调 Dispose，
+            // DestroyWindow 会失败并留下一个僵尸窗口 —— 这里显式检查，
+            // 至少把问题暴露在日志里而不是静默。
+            if (GetCurrentThreadId() == _ownerThreadId)
+            {
+                DestroyWindow(_hwnd);
+            }
+            else
+            {
+                // 跨线程销毁：投递 WM_CLOSE，由属主线程的消息泵异步处理
+                PostMessage(_hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            }
             _hwnd = IntPtr.Zero;
         }
     }

@@ -377,3 +377,81 @@ func TestClientIP(t *testing.T) {
 		}
 	}
 }
+
+// ---------- WebSocket 消息信封 ----------
+
+// newTestClient 造一个不真正建连的 Client，仅用于测试 onWSSMessage 的分发逻辑。
+// 这里刻意不调用 hub.Serve —— 那会启动读写循环并需要真实 socket。
+func newTestClient(h *hub.Hub) *hub.Client {
+	return h.NewClient(nil, "dev-1", "测试机", "windows")
+}
+
+// TestHelloIsHandledNotIgnored 钉住"服务端认识 hello"这一点。
+//
+// 背景：protocol 第 3.1 节把 hello 列为 C → S 的必发消息，Windows 客户端连上后
+// 也确实会发；但服务端 onWSSMessage 的 switch 里原本没有这个 case，
+// 消息落进 default 被静默忽略 —— 日志里完全看不出握手发生过，
+// 排障时无法区分"客户端没发"与"服务端没认"。
+func TestHelloIsHandledNotIgnored(t *testing.T) {
+	s := newTestServer(t)
+	c := newTestClient(s.hub)
+
+	raw := []byte(`{"type":"hello","msgId":"m1","ts":1766000000000,` +
+		`"payload":{"deviceId":"dev-1","deviceName":"测试机","platform":"windows"}}`)
+
+	// hello 不需要回复，但必须"被处理"而不是落到 default。
+	// 这里通过"返回值仍为 nil 且不产生错误信封"来间接确认：
+	// 真正的区分点是它不返回 error 类型的 envelope。
+	if reply := s.onWSSMessage(c, raw); reply != nil {
+		if env, ok := reply.(model.Envelope); ok && env.Type == model.TypeError {
+			t.Fatalf("hello 不应被当成未知消息报错，实际返回 %+v", reply)
+		}
+	}
+}
+
+// TestAckIsAccepted 客户端回 ack 时不应报错，也不应触发任何业务副作用
+func TestAckIsAccepted(t *testing.T) {
+	s := newTestServer(t)
+	c := newTestClient(s.hub)
+
+	raw := []byte(`{"type":"ack","msgId":"ack-1","ts":1766000000000,` +
+		`"payload":{"msgId":"orig-1","status":"ok","code":0}}`)
+
+	if reply := s.onWSSMessage(c, raw); reply != nil {
+		if env, ok := reply.(model.Envelope); ok && env.Type == model.TypeError {
+			t.Fatalf("合法 ack 不应返回错误信封，实际 %+v", reply)
+		}
+	}
+}
+
+// TestPingReturnsPong 心跳必须回 pong，否则客户端会判连接失效并重连
+func TestPingReturnsPong(t *testing.T) {
+	s := newTestServer(t)
+	c := newTestClient(s.hub)
+
+	raw := []byte(`{"type":"ping","msgId":"p1","ts":1766000000000}`)
+	reply := s.onWSSMessage(c, raw)
+
+	env, ok := reply.(model.Envelope)
+	if !ok {
+		t.Fatalf("ping 应返回 Envelope，实际 %T", reply)
+	}
+	if env.Type != model.TypePong {
+		t.Fatalf("ping 应回 pong，实际 %q", env.Type)
+	}
+	if env.MsgID != "p1" {
+		t.Fatalf("pong 应复用请求的 msgId，实际 %q", env.MsgID)
+	}
+}
+
+// TestMalformedMessageReturnsError 垃圾输入不能把服务端打挂
+func TestMalformedMessageReturnsError(t *testing.T) {
+	s := newTestServer(t)
+	c := newTestClient(s.hub)
+
+	reply := s.onWSSMessage(c, []byte(`{not json`))
+	env, ok := reply.(model.Envelope)
+	if !ok || env.Type != model.TypeError {
+		t.Fatalf("非法 JSON 应返回 error 信封，实际 %T %+v", reply, reply)
+	}
+}

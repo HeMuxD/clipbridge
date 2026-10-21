@@ -75,6 +75,26 @@ public sealed class HashCache
         }
     }
 
+    /// <summary>
+    /// 撤销一次登记。
+    ///
+    /// 场景：下行先登记 hash（必须早于写剪贴板，否则回环挡不住），
+    /// 但随后下载或写入失败 —— 此时内容并没有真正"处理过"。
+    /// 若不撤销，对端重发这份内容时会被 Contains 永久跳过，表现为"漏同步且无法自愈"。
+    ///
+    /// 只影响这一个 hash，不影响其他条目；不存在时是安全的空操作。
+    /// </summary>
+    public void Remove(string hash)
+    {
+        if (string.IsNullOrEmpty(hash)) return;
+
+        lock (_gate)
+        {
+            if (!_set.Remove(hash)) return;
+            _order.Remove(hash);
+        }
+    }
+
     /// <summary>清空缓存（重新配对待同步内容变化后调用）</summary>
     public void Clear()
     {

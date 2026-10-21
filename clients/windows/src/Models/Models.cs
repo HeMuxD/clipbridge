@@ -34,7 +34,17 @@ public sealed class Envelope
     [JsonPropertyName("type")] public string Type { get; set; } = "";
     [JsonPropertyName("msgId")] public string MsgId { get; set; } = "";
     [JsonPropertyName("ts")] public long Ts { get; set; }
-    [JsonPropertyName("payload")] public ClipPayload? Payload { get; set; }
+
+    /// <summary>
+    /// 消息体。类型随 Type 变化（clip → ClipPayload，ack → AckPayload，……），
+    /// 所以必须是 object 而不是 ClipPayload。
+    ///
+    /// 这里曾经写成 ClipPayload? —— 那时客户端只发 clip，凑巧能用；
+    /// 一旦要回 ack（协议第 7.2 节要求），编译器就报
+    /// "无法将 AckPayload 隐式转换为 ClipPayload"。收敛成 object 才对得上协议的信封模型。
+    /// 序列化时会按实际运行时类型展开，反序列化仍走各自的强类型。
+    /// </summary>
+    [JsonPropertyName("payload")] public object? Payload { get; set; }
 }
 
 /// <summary>clip 消息的消息体</summary>

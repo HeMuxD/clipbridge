@@ -51,6 +51,9 @@ class ScreenshotWatcher(private val ctx: Context) {
             "截屏", "截图", "屏幕截图",
         )
 
+        /** 已处理 MediaStore 条目最多记多少条（防长期运行内存无上限增长） */
+        private const val MAX_HANDLED = 500
+
         /** 需要申请的权限名。Android 13 起按媒体类型细分。 */
         fun requiredPermission(): String =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -74,9 +77,35 @@ class ScreenshotWatcher(private val ctx: Context) {
      * 系统对一次截图会触发**多次** onChange（插入、IS_PENDING 置 0 各一次），
      * 而 handle() 每次都重新读文件 —— 如果某次读到的还是没写完的半截数据，
      * 内容哈希就和完整版不同，HashCache 那道去重挡不住，结果同一张截图被上行两次。
-     * 所以这里按条目直接去重。（handle 都在同一个 HandlerThread 上跑，不用加锁。）
+     * 所以这里按条目直接去重。
+     *
+     * ⚠️ 必须加锁：handle() 跑在 HandlerThread 上，而 stop() 由主线程调用并清理它。
+     * 早先注释写的"都在同一 HandlerThread 上跑，不用加锁"是错的。
+     *
+     * ⚠️ 必须有上限：进程长期存活时只增不减，截图刷得多了会一直吃内存。
+     * 用一个简单的环形淘汰（保留最近 MAX_HANDLED 条）即可 —— 更早的条目
+     * 系统也不会再对它触发 onChange 了。
      */
-    private val handledUris = HashSet<String>()
+    private val handledUris = object : LinkedHashSet<String>() {
+        // 继承 LinkedHashSet 以保留插入顺序，供淘汰最旧的一项
+    }
+    private val handledLock = Any()
+
+    private fun markHandled(uri: String): Boolean = synchronized(handledLock) {
+        if (!handledUris.add(uri)) return false
+        while (handledUris.size > MAX_HANDLED) {
+            val oldest = handledUris.iterator()
+            if (oldest.hasNext()) {
+                oldest.next()
+                oldest.remove()
+            }
+        }
+        true
+    }
+
+    private fun clearHandled() = synchronized(handledLock) {
+        handledUris.clear()
+    }
 
     fun isRunning(): Boolean = observer != null
 
@@ -111,7 +140,7 @@ class ScreenshotWatcher(private val ctx: Context) {
     fun stop() {
         observer?.let { runCatching { ctx.contentResolver.unregisterContentObserver(it) } }
         observer = null
-        handledUris.clear()
+        clearHandled()
         thread?.quitSafely()
         thread = null
         StatusHolder.addDiag("截图监听已停止")
@@ -141,7 +170,7 @@ class ScreenshotWatcher(private val ctx: Context) {
     private fun handle(uri: Uri) {
         try {
             // 同一个条目只处理一次：见 handledUris 的说明
-            if (!handledUris.add(uri.toString())) return
+            if (!markHandled(uri.toString())) return
 
             val info = queryInfo(uri) ?: return
             if (!info.looksLikeScreenshot) return

@@ -27,11 +27,30 @@ object ClipClient {
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        // WebSocket 不能用短读超时：应用层心跳是 30 秒一次（SyncEngine.PING_INTERVAL_MS），
+        // 读超时若也设 30 秒，边界完全贴死，网络稍有抖动就会在两次心跳之间被判超时断开。
+        // 这里置 0（不限），由 OkHttp 自带的 pingInterval 与系统 TCP keepalive 负责保活。
+        // 普通 HTTP 请求（配对/上传/下载）由各自调用点控制，不受影响。
+        .readTimeout(0, TimeUnit.SECONDS)
+        .pingInterval(25, TimeUnit.SECONDS)
         .build()
 
     @Volatile var ws: WebSocket? = null
+
+    /**
+     * 当前连接是否可用。
+     *
+     * 必须用 @Volatile：写它的是 OkHttp 的读/写线程（回调里），
+     * 读它的是无障碍服务、截图线程、UI 线程 —— 不 volatile 会读到陈旧的 false，
+     * 表现为"明明连着却说未连接，于是不上行"。
+     */
     @Volatile var connected = false
+        private set
+
+    /** 供内部回调置位（外部只读，避免别处随手改坏连接状态） */
+    private fun setConnected(v: Boolean) {
+        connected = v
+    }
 
     @Volatile var serverUrl = ""
     @Volatile var token = ""
@@ -96,9 +115,10 @@ object ClipClient {
     }
 
     fun disconnect() {
-        try { ws?.close(1000, "bye") } catch (_: Exception) {}
+        val old = ws
         ws = null
-        connected = false
+        setConnected(false)
+        try { old?.close(1000, "bye") } catch (_: Exception) {}
     }
 
     // ---------- 上行 ----------
@@ -159,6 +179,33 @@ object ClipClient {
         return ws.send(env.toString())
     }
 
+    /**
+     * 回一条 ACK，确认收到某条 clip。
+     *
+     * 这是客户端唯一能提供给服务端的"已落地"证据，排障时能区分
+     * "服务端没广播" 与 "广播了但客户端没处理"。
+     * 发送失败无所谓，下一条消息还会带新的 ACK。
+     */
+    private fun ack(msgId: String) {
+        if (msgId.isEmpty()) return
+        val ws = ws ?: return
+        if (!connected) return
+        try {
+            val env = JSONObject().apply {
+                put("type", MsgType.ACK)
+                put("msgId", UUID.randomUUID().toString())
+                put("ts", System.currentTimeMillis())
+                put("payload", JSONObject().apply {
+                    put("msgId", msgId)
+                    put("status", "ok")
+                })
+            }
+            ws.send(env.toString())
+        } catch (e: Exception) {
+            Log.d(TAG, "回 ACK 失败：${e.message}")
+        }
+    }
+
     fun sendPing() {
         val env = JSONObject().apply {
             put("type", MsgType.PING)
@@ -169,23 +216,51 @@ object ClipClient {
     }
 
     // ---------- WebSocket 回调 ----------
+    //
+    // ⚠️ 每个回调都必须先确认"我是不是当前那条连接"。
+    //
+    // 原因：wsListener 是全局单例，而 connect() 会先 disconnect() 关掉旧 socket。
+    // 旧 socket 的 onClosed/onFailure 是**异步**到达的，往往晚于新连接的 onOpen。
+    // 如果不做身份校验，旧 socket 的关闭回调会把刚建好的新连接置成 connected=false
+    // 并触发 scheduleReconnect()，于是"刚连上就被判掉线 → 再连 → 再被旧回调打断"，
+    // 形成自激重连。判据很简单：回调里的 webSocket 就是当前 ws 的那个对象才作数。
 
     private val wsListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            connected = true
+            if (webSocket !== ws) {
+                Log.d(TAG, "忽略过期 socket 的 onOpen")
+                return
+            }
+            setConnected(true)
             StatusHolder.connected.value = true
             listener?.onConnected()
+            // 连上之后立刻报告一次活动，让读超时有东西可等
+            webSocket.send("""{"type":"${MsgType.PING}","msgId":"${java.util.UUID.randomUUID()}"}""")
         }
+
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (webSocket !== ws) return
             handleMessage(text)
         }
+
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            connected = false
+            if (webSocket !== ws) {
+                Log.d(TAG, "忽略过期 socket 的 onClosed(code=$code)")
+                return
+            }
+            Log.i(TAG, "连接关闭：code=$code reason=$reason")
+            setConnected(false)
             StatusHolder.connected.value = false
             listener?.onDisconnected()
         }
+
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            connected = false
+            if (webSocket !== ws) {
+                Log.d(TAG, "忽略过期 socket 的 onFailure：${t.message}")
+                return
+            }
+            Log.w(TAG, "连接失败：${t.message}")
+            setConnected(false)
             StatusHolder.connected.value = false
             listener?.onDisconnected()
         }
@@ -208,6 +283,14 @@ object ClipClient {
                             if (url.isNotEmpty()) listener?.onImage(srcName, url)
                         }
                     }
+                    // 交给上层之后再回 ACK：协议第 7.2 节第 5 步的语义是
+                    // "我已落地"，所以必须排在处理之后（文本是同步写剪贴板，
+                    // 图片是异步下载，这里至少保证消息已被接收并分派）。
+                    ack(root.optString("msgId"))
+                }
+                MsgType.PONG -> {
+                    // 收到 pong 说明链路正常，刷新一下状态即可
+                    StatusHolder.connected.value = true
                 }
                 MsgType.ERROR -> {
                     val p = root.optJSONObject("payload")

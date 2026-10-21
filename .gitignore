@@ -29,6 +29,23 @@ clients/android/.idea/
 *.keystore
 *.jks
 
+# Gradle Wrapper 的发行包与本地缓存
+clients/android/gradle/*.zip
+
+# 图标生成脚本的预览产物
+clients/android/_icon_preview_240.png
+
+# ---- 项目内工具链（可移植二进制，不入库）----
+# 见 AGENTS.md 第 3 节：工具随项目走，但不提交。
+tools/go/
+tools/dotnet/
+tools/dotnet-home/
+tools/jdk/
+tools/gradle/
+tools/gradle-home/
+tools/android-sdk/
+tools/android-home/
+
 # ---- 机密 ----
 *.pem
 *.key
