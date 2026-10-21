@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # ClipBridge 服务端构建脚本
 #
 # 用法：
@@ -8,14 +8,14 @@
 #   ./scripts/build.sh all          # 一次产出 linux / windows 两个目标
 #
 # 版本号：
-#   VERSION=0.0.11 ./scripts/build.sh linux
-#   默认 0.0.11，与服务端 internal/buildinfo 的默认值保持一致。
+#   VERSION=0.0.12 ./scripts/build.sh linux
+#   默认 0.0.12，与服务端 internal/buildinfo 的默认值保持一致。
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-0.0.11}"
+VERSION="${VERSION:-0.0.12}"
 OUT_DIR="dist"
 TARGET="${1:-native}"
 

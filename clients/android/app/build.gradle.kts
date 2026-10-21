@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -14,8 +14,8 @@ android {
         minSdk = 24
         // targetSdk 保持 34，规避 Android 15 对前台服务(dataSync)的 6 小时时长上限
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.0.11"
+        versionCode = 12
+        versionName = "0.0.12"
     }
 
     buildTypes {

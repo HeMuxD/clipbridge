@@ -1,4 +1,4 @@
-# ClipBridge 服务端镜像（用户本地构建版）
+﻿# ClipBridge 服务端镜像（用户本地构建版）
 #
 # 这个 Dockerfile 与同目录的 Dockerfile 用途不同，不要混用：
 #
@@ -15,12 +15,12 @@
 # .csproj.user 用），改那个名字会被一起忽略掉、提交不上来。
 #
 # 构建：
-#   docker build -f Dockerfile.standalone -t clipbridge:0.0.11 .
+#   docker build -f Dockerfile.standalone -t clipbridge:0.0.12 .
 #
 #   # 国内下载源码慢时指定镜像源：
 #   docker build -f Dockerfile.standalone \
-#     --build-arg CLIPBRIDGE_SOURCE_URL=https://ghproxy.net/https://github.com/HeMuxD/clipbridge/archive/refs/tags/v0.0.11.tar.gz \
-#     -t clipbridge:0.0.11 .
+#     --build-arg CLIPBRIDGE_SOURCE_URL=https://ghproxy.net/https://github.com/HeMuxD/clipbridge/archive/refs/tags/v0.0.12.tar.gz \
+#     -t clipbridge:0.0.12 .
 
 ARG GOLANG_IMAGE=docker.m.daocloud.io/library/golang:1.22-alpine
 ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
@@ -29,7 +29,7 @@ ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
 ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
 
 # 源码下载地址。留空则按版本号自动拼官方 tarball；国内慢就换成镜像，例如：
-#   https://ghproxy.net/https://github.com/HeMuxD/clipbridge/archive/refs/tags/v0.0.11.tar.gz
+#   https://ghproxy.net/https://github.com/HeMuxD/clipbridge/archive/refs/tags/v0.0.12.tar.gz
 # 用 compose 时对应 .env 的 CLIPBRIDGE_SOURCE_URL。
 ARG CLIPBRIDGE_SOURCE_URL=
 
@@ -44,7 +44,7 @@ ENV GOPROXY=${GOPROXY} \
 WORKDIR /build
 
 ARG CLIPBRIDGE_SOURCE_URL
-ARG VERSION=0.0.11
+ARG VERSION=0.0.12
 
 # 没显式指定下载地址时，按版本号拼出官方 tarball 地址。
 # 版本号可能带 -image / -rc1 这类后缀（那是镜像 tag），但 Git tag 一定是 vX.Y.Z，
