@@ -118,6 +118,7 @@ public static class SettingsStore
         AutoStart = s.AutoStart,
         MaxContentBytes = s.MaxContentBytes,
         ExcludedProcesses = s.ExcludedProcesses,
+        SendToMenu = s.SendToMenu,
         FilterSensitive = s.FilterSensitive,
         ShowNotifications = s.ShowNotifications,
         Token = "",

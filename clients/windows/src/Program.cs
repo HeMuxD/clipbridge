@@ -31,7 +31,7 @@ internal sealed class TrayApplication : ApplicationContext
     /// </summary>
     private readonly Control _uiAnchor = new();
 
-    public TrayApplication(bool startMinimized)
+    public TrayApplication(bool startMinimized, string[]? sharePaths = null)
     {
         // 先把锚点控件的句柄建出来 —— 此刻就在 UI 线程上
         _ = _uiAnchor.Handle;
@@ -56,6 +56,7 @@ internal sealed class TrayApplication : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("设置…", null, (_, _) => ShowSettings()));
         menu.Items.Add(new ToolStripMenuItem("立即同步剪贴板", null, (_, _) => ForceSyncNow()));
+        menu.Items.Add(new ToolStripMenuItem("分享图片文件…", null, (_, _) => PickAndShareImage()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("打开日志目录", null, (_, _) => OpenLogs()));
         menu.Items.Add(new ToolStripMenuItem("退出", null, (_, _) => ExitApp()));
@@ -79,6 +80,35 @@ internal sealed class TrayApplication : ApplicationContext
 
         _orchestrator.Start();
 
+        // 「发送到」的投递通道。必须在"处理首个 sharePaths"之前启动：
+        // 用户可能连续发几次，每一下都是一个新进程来投递。
+        ShareIpc.StartServer(paths => RunOnUi(() => _ = ShareImagesAsync(paths)));
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                // 旧版本把入口放在右键首层（<ext>\shell\ClipBridgeShare）。
+                // 现在统一到「发送到」里，这里清掉残留，避免出现两个入口。
+                SendToMenu.RemoveLegacyShellVerb();
+
+                var wanted = _settings.SendToMenu;
+                if (wanted)
+                {
+                    // 目标路径可能因程序换目录而失效，所以只要不是当前 exe 就重写
+                    if (!SendToMenu.IsUpToDate()) SendToMenu.SetEnabled(true);
+                }
+                else if (SendToMenu.IsEnabled())
+                {
+                    SendToMenu.SetEnabled(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"同步「发送到」菜单失败：{ex.Message}");
+            }
+        });
+
         if (startMinimized)
         {
             Notify("ClipBridge 已在后台运行",
@@ -90,6 +120,58 @@ internal sealed class TrayApplication : ApplicationContext
         {
             // 首次运行直接打开设置向导
             ShowSettings();
+        }
+
+        // 本次就是被「发送到」拉起来的：直接走本地调用，
+        // 不必绕一圈管道交给自己。
+        if (sharePaths is { Length: > 0 })
+        {
+            _ = ShareImagesAsync(sharePaths);
+        }
+    }
+
+    /// <summary>
+    /// 从托盘菜单选一个图片文件来分享。
+    ///
+    /// 有这个入口，是因为右键「发送到」只对资源管理器里选中的文件生效，
+    /// 而用户可能想分享一张不在那里的图（例如从聊天软件里另存出来的）。
+    /// 既然底层已支持批量，这里也放开多选。
+    /// </summary>
+    private void PickAndShareImage()
+    {
+        RunOnUi(() =>
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title = "选择要分享的图片",
+                Filter = "图片文件|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|所有文件|*.*",
+                CheckFileExists = true,
+                Multiselect = true,
+            };
+            if (dlg.ShowDialog() != DialogResult.OK) return;
+            _ = ShareImagesAsync(dlg.FileNames);
+        });
+    }
+
+    /// <summary>
+    /// 分享一批本地图片文件。所有入口（发送到菜单首启 / 管道投递 / 托盘菜单）
+    /// 最终都汇到这里，保证行为一致。
+    ///
+    /// 逐个串行发送：并发上传会同时占用多条连接，在弱网下反而更容易失败，
+    /// 而且用户看到的状态提示会互相覆盖。
+    /// </summary>
+    private async Task ShareImagesAsync(string[] paths)
+    {
+        if (paths.Length == 0) return;
+
+        for (var i = 0; i < paths.Length; i++)
+        {
+            var name = Path.GetFileName(paths[i]);
+            _statusItem.Text = paths.Length == 1
+                ? $"状态：正在分享 {name}…"
+                : $"状态：正在分享 {name}（{i + 1}/{paths.Length}）…";
+
+            await _orchestrator.ShareImageFileAsync(paths[i]);
         }
     }
 
@@ -249,10 +331,27 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // 「发送到 → 使用 ClipBridge 推送」传入的图片路径（可能多个）。
+        // 必须在处理单实例之前解析：这条路走的是"转发给已在运行的实例"，
+        // 而不是"再启动一个实例"。
+        var sharePaths = GetSharePaths(args);
+
         // 单实例：多开会导致同一份剪贴板被重复上报
         using var single = new SingleInstance();
         if (!single.IsFirstInstance)
         {
+            if (sharePaths.Length > 0)
+            {
+                // 已有实例在跑：把路径交给它，自己不弹窗、不建托盘、立刻退出。
+                if (!ShareIpc.TrySend(sharePaths))
+                {
+                    MessageBox.Show(
+                        "无法把图片转交给正在运行的 ClipBridge。\n请确认托盘图标还在，或重启程序后重试。",
+                        "ClipBridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                return;
+            }
+
             MessageBox.Show("ClipBridge 已在运行中，请在系统托盘中查看。",
                 "ClipBridge", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
@@ -279,7 +378,7 @@ internal static class Program
 
         try
         {
-            Application.Run(new TrayApplication(startMinimized));
+            Application.Run(new TrayApplication(startMinimized, sharePaths));
         }
         catch (Exception ex)
         {
@@ -287,5 +386,52 @@ internal static class Program
             MessageBox.Show($"ClipBridge 遇到错误并退出：\n\n{ex.Message}\n\n日志位置：\n{Log.LogDirectory}",
                 "ClipBridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    /// <summary>
+    /// 从命令行解析「要分享的图片路径」。
+    ///
+    /// 两种来源都要支持：
+    ///   1. <c>--share-image &lt;路径&gt;</c>（我们自己定义的开关，注册表 verb 用它）；
+    ///   2. <c>--share-image</c> 后面【什么都不带】的裸路径列表 ——
+    ///      这是「发送到」的工作方式：资源管理器把选中文件的路径追加在
+    ///      快捷方式的 Arguments 之后，所以启动命令行长这样：
+    ///        ClipBridge.exe --share-image "C:\a.png" "C:\b.png"
+    ///      多选文件时路径依次追加。
+    ///
+    /// 空数组表示这不是一次分享调用。
+    /// </summary>
+    private static string[] GetSharePaths(string[] args)
+    {
+        var result = new List<string>();
+        var isShareCall = false;
+
+        foreach (var raw in args)
+        {
+            var a = raw.Trim('"');
+            if (a.Length == 0) continue;
+
+            if (a.StartsWith("--share-image=", StringComparison.OrdinalIgnoreCase))
+            {
+                isShareCall = true;
+                var inline = a["--share-image=".Length..].Trim('"');
+                if (inline.Length > 0) result.Add(inline);
+                continue;
+            }
+
+            if (a.Equals("--share-image", StringComparison.OrdinalIgnoreCase))
+            {
+                isShareCall = true;
+                continue;
+            }
+
+            // 其它以 -- 开头的开关（如 --minimized）跳过，不当成路径
+            if (a.StartsWith("--", StringComparison.Ordinal)) continue;
+
+            // 剩下的按路径收下（SendTo 追加的那些）
+            if (isShareCall) result.Add(a);
+        }
+
+        return result.ToArray();
     }
 }

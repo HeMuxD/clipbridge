@@ -24,6 +24,7 @@ public sealed class SettingsForm : Form
     private readonly Button _browseFolder = new();
     private readonly Button _openFolder = new();
     private readonly CheckBox _autoStart = new();
+    private readonly CheckBox _sendToMenu = new();
     private readonly CheckBox _filterSensitive = new();
     private readonly TextBox _excluded = new();
     private readonly Label _status = new();
@@ -167,20 +168,40 @@ public sealed class SettingsForm : Form
         _autoStart.Location = new Point(16, y);
         _autoStart.Size = new Size(300, 22);
         Controls.Add(_autoStart);
+        y += 26;
+
+        // 与 Android 端 ACTION_SEND 对应：右键 → 发送到 → 推送图片文件，
+        // 不必先复制进剪贴板。会写 SendTo 目录，所以放在"启动"这类系统集成分组下。
+        _sendToMenu.Text = "右键「发送到」菜单：使用 ClipBridge 推送到其他设备";
+        _sendToMenu.Location = new Point(16, y);
+        _sendToMenu.Size = new Size(470, 22);
+        Controls.Add(_sendToMenu);
         y += 32;
 
         // ---- 状态栏与按钮 ----
         _status.Location = new Point(16, y);
-        _status.Size = new Size(486, 40);
+        _status.Size = new Size(486, 36);
         _status.ForeColor = Color.DimGray;
         _status.Text = "就绪";
         Controls.Add(_status);
+        y += 44;
+
+        // 按钮行紧跟在内容之后，窗口高度按实际内容计算。
+        //
+        // 这里【不能】再用 ClientSize.Height - 44 定位按钮：窗口高度原本写死 656，
+        // 而新增「资源管理器右键菜单」一行占掉 32px 后，状态栏下移到 590~626，
+        // 按钮却被钉在 612~642 —— 既压住"就绪"文字，又被窗口底边裁掉一半。
+        // 改成"内容多高、窗口多高"，以后再加设置项也不会重演。
+        const int ButtonHeight = 30;
+        const int BottomMargin = 14;
+        var buttonTop = y;
+        ClientSize = new Size(520, buttonTop + ButtonHeight + BottomMargin);
 
         var save = new Button
         {
             Text = "保存",
-            Location = new Point(330, ClientSize.Height - 44),
-            Size = new Size(84, 30),
+            Location = new Point(330, buttonTop),
+            Size = new Size(84, ButtonHeight),
         };
         save.Click += OnSaveClick;
         Controls.Add(save);
@@ -188,8 +209,8 @@ public sealed class SettingsForm : Form
         var cancel = new Button
         {
             Text = "取消",
-            Location = new Point(420, ClientSize.Height - 44),
-            Size = new Size(84, 30),
+            Location = new Point(420, buttonTop),
+            Size = new Size(84, ButtonHeight),
         };
         // 本窗体是用 Show() 非模态打开的，而 DialogResult 只有 ShowDialog() 才会
         // 自动关窗 —— 只设 DialogResult 等于点了没反应。这里显式 Close()。
@@ -200,8 +221,8 @@ public sealed class SettingsForm : Form
         var openLogs = new Button
         {
             Text = "打开日志",
-            Location = new Point(16, ClientSize.Height - 44),
-            Size = new Size(96, 30),
+            Location = new Point(16, buttonTop),
+            Size = new Size(96, ButtonHeight),
         };
         openLogs.Click += (_, _) =>
         {
@@ -259,6 +280,9 @@ public sealed class SettingsForm : Form
         _syncImage.Checked = _settings.SyncImage;
         _watchFolder.Checked = _settings.WatchScreenshotFolder;
         _autoStart.Checked = AutoStart.IsEnabled();
+        // 以磁盘上的实际状态为准而不是配置里的值：用户可能手工删过快捷方式，
+        // 显示真实状态才不会误导。
+        _sendToMenu.Checked = SendToMenu.IsEnabled();
         _filterSensitive.Checked = _settings.FilterSensitive;
         _excluded.Text = string.Join(", ", _settings.ExcludedProcesses);
         _saveImages.Checked = _settings.SaveReceivedImages;
@@ -448,12 +472,26 @@ public sealed class SettingsForm : Form
         var autoStartOk = AutoStart.SetEnabled(_autoStart.Checked);
         _settings.AutoStart = _autoStart.Checked;
 
+        // 「发送到」同理：先写快捷方式，再把实际结果记进配置
+        var sendToOk = SendToMenu.SetEnabled(_sendToMenu.Checked, out var sendToErr);
+        _settings.SendToMenu = _sendToMenu.Checked;
+
         SettingsStore.Save(_settings);
 
         if (!autoStartOk)
         {
             MessageBox.Show(this, "开机自启设置失败（可能被安全软件拦截）", "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        if (!sendToOk)
+        {
+            // 把具体原因一并显示：只说"注册失败"等于没提示，
+            // 用户既不知道是权限、安全软件还是路径问题。
+            var detail = string.IsNullOrEmpty(sendToErr) ? "" : $"\n\n原因：{sendToErr}";
+            MessageBox.Show(this,
+                $"「发送到」菜单注册失败，其余设置已保存。{detail}\n\n可稍后重试。",
+                "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Log.Warn($"「发送到」菜单注册失败：{sendToErr}");
         }
 
         _orchestrator.Reload();

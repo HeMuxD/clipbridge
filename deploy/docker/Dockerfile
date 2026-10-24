@@ -1,4 +1,4 @@
-﻿# ClipBridge 服务端镜像（Go 二进制 + Nginx 在同一个镜像里）
+# ClipBridge 服务端镜像（Go 二进制 + Nginx 在同一个镜像里）
 #
 # 为什么合并成一个镜像：
 #   · 部署只有一个容器，没有 Docker 网络、没有跨容器依赖，NAS 上更好管
@@ -7,7 +7,7 @@
 #   · 用户只需要挂两个目录：数据目录 与 证书目录
 #
 # 构建（在仓库【根目录】执行，上下文必须是仓库根）：
-#   docker build -f deploy/docker/Dockerfile -t clipbridge:0.9.9 .
+#   docker build -f deploy/docker/Dockerfile -t clipbridge:1.0.0 .
 #
 # 基础镜像源：默认走 DaoCloud 公共镜像站（国内可直连），规避 Docker Hub
 # 及飞牛 NAS 默认加速器 docker.fnnas.com 拉取 401 的问题。
@@ -44,7 +44,7 @@ COPY server/ .
 
 # -trimpath + -s -w：去掉绝对路径与调试符号，得到体积小、可移植的静态二进制
 # 版本号注入到 internal/buildinfo.Version（服务端 -version 与 /healthz 都读它）
-ARG VERSION=0.9.9
+ARG VERSION=1.0.0
 RUN go build \
         -trimpath \
         -ldflags="-s -w -X github.com/clipbridge/server/internal/buildinfo.Version=${VERSION}" \

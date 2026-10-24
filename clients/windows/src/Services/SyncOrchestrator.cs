@@ -410,6 +410,70 @@ public sealed class SyncOrchestrator : IDisposable
     }
 
     /// <summary>
+    /// 分享一个本地图片文件到其他设备（资源管理器右键菜单 / 双击图片时用）。
+    ///
+    /// 与剪贴板路径的区别：源是磁盘上的文件，不经过剪贴板，也不写入剪贴板 ——
+    /// 用户只是想把这张图发出去，不希望它顺带顶掉当前剪贴板内容。
+    ///
+    /// 与 Android 端 ACTION_SEND 的语义一一对应（origin=share）。
+    /// </summary>
+    public async Task ShareImageFileAsync(string path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                Log.Warn($"分享失败：文件不存在（{path}）");
+                StatusMessage?.Invoke("分享失败：文件不存在");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(_settings.Token))
+            {
+                StatusMessage?.Invoke("尚未配对，请先在设置中完成配对");
+                return;
+            }
+            if (!_client.IsConnected)
+            {
+                StatusMessage?.Invoke("未连接服务端，无法分享");
+                return;
+            }
+
+            var raw = await File.ReadAllBytesAsync(path);
+            if (raw.Length == 0)
+            {
+                Log.Warn($"分享失败：文件为空（{path}）");
+                StatusMessage?.Invoke("分享失败：文件为空");
+                return;
+            }
+
+            // 统一转成 PNG：服务端的魔数白名单只认 PNG/JPEG/WebP/GIF，
+            // 而 .bmp 这类格式转换后才有确定的结果；已是 PNG 的会原样返回。
+            var png = NormalizeToPng(raw);
+            if (png.Length > _settings.MaxContentBytes)
+            {
+                Log.Warn($"图片过大（{png.Length} 字节），已跳过");
+                StatusMessage?.Invoke("图片超过大小上限，已跳过分享");
+                return;
+            }
+
+            var hash = Hashing.Sha256Hex(png);
+
+            // 用户主动点了分享，就是明确要发这一次，不看哈希缓存；
+            // 但要登记进缓存，避免服务端广播回来时本机再写一遍剪贴板。
+            _cache.Add(hash);
+
+            Log.Info($"分享图片：{Path.GetFileName(path)}（{png.Length} 字节）");
+            await SendImageAsync(png, hash, ClipOrigin.Share);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"分享图片失败：{path}", ex);
+            StatusMessage?.Invoke($"分享失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// 手动同步一次：把"此刻"剪贴板里的内容直接发出去。
     ///
     /// 与自动同步的区别是它不看哈希缓存 —— 用户主动点了菜单，

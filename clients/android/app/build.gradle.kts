@@ -1,4 +1,4 @@
-﻿plugins {
+plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -15,9 +15,11 @@ android {
         // targetSdk 保持 34，规避 Android 15 对前台服务(dataSync)的 6 小时时长上限
         targetSdk = 34
         // versionCode 必须单调递增，否则覆盖安装会被系统拒绝。
-        // 0.9.9 起改用「主*100+次」的编码（0.9.9 → 909），不再沿用 0.0.x 的流水号。
-        versionCode = 909
-        versionName = "0.9.9"
+        // 编码规则：主版本*10000 + 次版本*100 + 修订号（1.0.0 → 10000）。
+        // 从 0.9.9(909) 跳到 1.0.0 用 10000 而不是 1000 —— 后者会让 1.0.0 与
+        // 将来的 0.10.0 在同一区间，留出进位空间才不会撞车。
+        versionCode = 10000
+        versionName = "1.0.0"
     }
 
     buildTypes {

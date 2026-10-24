@@ -164,6 +164,19 @@ public sealed class AppSettings
     /// <summary>不参与同步的进程名（不含 .exe，小写）。用于排除密码管理器等</summary>
     public List<string> ExcludedProcesses { get; set; } = new();
 
+    /// <summary>
+    /// 是否注册「右键 → 发送到 → 使用 ClipBridge 推送到其他设备」。
+    ///
+    /// 默认开启：这是 Windows 端"主动分享图片文件"的入口，
+    /// 与 Android 的 ACTION_SEND 对应。
+    ///
+    /// 实现方式是在 %APPDATA%\Microsoft\Windows\SendTo 放一个快捷方式，
+    /// 属于用户级文件操作，不需要管理员权限，关掉即删除。
+    /// 选「发送到」而不是右键首层 verb，是因为它不受 Win11 菜单折叠影响，
+    /// 且天然支持多选多个文件。
+    /// </summary>
+    public bool SendToMenu { get; set; } = true;
+
     /// <summary>是否启用本地敏感内容检测</summary>
     public bool FilterSensitive { get; set; } = true;
 

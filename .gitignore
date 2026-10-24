@@ -35,6 +35,9 @@ clients/android/.idea/
 # Gradle Wrapper 的发行包与本地缓存
 clients/android/gradle/*.zip
 
+# Kotlin 编译器增量缓存（每台机器各不相同，且会随构建无限增长）
+clients/android/.kotlin/
+
 # 图标生成脚本的预览产物
 clients/android/_icon_preview_240.png
 
@@ -48,6 +51,9 @@ tools/gradle/
 tools/gradle-home/
 tools/android-sdk/
 tools/android-home/
+# NuGet 包缓存与本地源配置（缓存有几百 MB，且属于本机环境）
+tools/nuget/
+tools/NuGet.Config
 
 # ---- 机密 ----
 *.pem
